@@ -117,6 +117,7 @@ def runClio(facets,
             nPointsToSample,
             nLLMSamplesPerCluster,
             nClustersOutside, # idk what they picked they didn't say
+            desiredNames, # idk what they picked they didn't say
             seed,
             conversationsFacets=None,
             conversationsEmbedings=None,
@@ -149,8 +150,8 @@ def runClio(facets,
         batchSize=llmBatchSize,
         seed=seed,
         **kwargs)
-    
-    hierarchy = getHierarchy(
+    print("Getting higher level clusters")
+    higherCategories = getHierarchy(
         facets=facets,
         llm=llm,
         tokenizer=llm.get_tokenizer(),
@@ -158,12 +159,13 @@ def runClio(facets,
         baseClusters=baseClusters,
         nClustersOutside=nClustersOutside,
         nLLMSamplesPerCluster=nLLMSamplesPerCluster,
+        desiredNames=desiredNames,
         seed=seed
     )
 
-    return conversationsFacets, conversationsEmbedings, kMeans, baseClusters
+    return conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories
 
-def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClustersOutside, nLLMSamplesPerCluster, seed):
+def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClustersOutside, nLLMSamplesPerCluster, desiredNames, seed):
     
     curLevelClusters = baseClusters
     #### Get embeddings for clusters ####
@@ -186,14 +188,16 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
             return np.stack(outputEmbeddings)
         else:
             return None
-
+    level = 0
+    print(f"Embedding higher level cluster on level {level}")
     clusterEmbeddings = runBatched(list(range(len(facets))),
                                    getInputs=getInputsFunc,
                                    processBatch=processBatchFunc,
                                    processOutput=processOutputFunc)
     
 
-    level = 0
+    #### Get higher level category names ####
+    kmeansOutputs = [None for _ in range(len(facets))]
     def getInputsFunc(facetI):
         facet = facets[facetI]
         allClusterPrompts = []
@@ -205,6 +209,7 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
             newK = numClusters // 40
             kmeans = KMeans(n_clusters=newK, random_state=seed)
             kmeans.fit(facetClusterEmbeddings)
+            kmeansOutputs[facetI] = kmeans
             distances = cdist(facetClusterEmbeddings, kmeans.cluster_centers_)
             for cluster_idx in range(len(kmeans.cluster_centers_)):
                 # Get points belonging to this cluster
@@ -221,11 +226,42 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
                 for _ in range(nLLMSamplesPerCluster):
                     # shuffle ordering
                     random.shuffle(clustersInNeighborhood)
-                    clusterPrompts.append(getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood))
+                    # idk desiredNames
+                    clusterPrompts.append(getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, desiredNames))
+                
                 allClusterPrompts.append(clusterPrompts)
-            
+        
+    
+    def processBatchFunc(clusterPrompts):
+        nonlocal seed
+        seed += 1
+        samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
+        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+        return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
+    
+    def processOutputFunc(facetI, clusterPrompts, clusterNamesOutputs):
+        facet = facets[facetI]
+        higherCategories = []
+        if shouldMakeFacetClusters(facet): 
+            kmeans = kmeansOutputs[facetI]
+            for cluster_idx, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), clusterNamesOutputs):
+                for output in clusterOutputs:
+                    posOfAnswer = output.lower().find("<answer>")
+                    if posOfAnswer != -1:
+                        posOfAnswer = cleanOutput(output[posOfAnswer + len("<answer>"):])
+                        answers = [re.sub("^\d*?\.", "", line.strip(), count=1) for line in posOfAnswer.split("\n") if len(line.strip()) >= 0]
+                        for answer in answers:
+                            higherCategories.apppend(answer)
+        return higherCategories
 
+    higherCategories = runBatched(list(range(len(facets))),
+               getInputs=getInputsFunc,
+               processBatch=processBatchFunc,
+               processOutput=processOutputFunc,
+               batchSize=batchSize)
 
+    return higherCategories
+    
 
 
     # list(enumerate(zip(facets, baseClusters)))
@@ -258,7 +294,6 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
                 # grab the facet values
                 clusterFacetValues = [conversationsFacets[i].facetValues[facetI].value for i in clusterPointsIndices]
                 clusterOutsideValues = [conversationsFacets[i].facetValues[facetI].value for i in sampledOutsideClusterIndices]
-                print(clusterFacetValues)
                 # generate the cluster name prompt
                 clusterPrompts = []
                 for _ in range(nLLMSamplesPerCluster):
@@ -327,7 +362,7 @@ def getEmbeddings(facets, conversationsFacets, embeddingModel, batchSize):
         facet = facets[facetI]
         if shouldMakeFacetClusters(facet):
             for conversationFacetData in conversationsFacets:
-                facetValue = conversationFacetData.facetValues[facetI]
+                facetValue = conversationFacetData.facetValues[facetI].value
                 facetInputs.append(facetValue)
         return facetInputs
     
