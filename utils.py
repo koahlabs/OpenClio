@@ -105,7 +105,7 @@ def convertSeconds(seconds):
 Display seconds as days, hours, minutes, seconds
 '''
 def secondsToDisplayStr(seconds):
-    day, hour, mins, sec = convertSeconds()
+    day, hour, mins, sec = convertSeconds(seconds)
     dispStr = ""
     if day > 0:
         dispStr += f"{round(day)} day{'s' if round(day) > 1 else ''}  "

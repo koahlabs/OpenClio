@@ -2,29 +2,41 @@ from prompts import getFacetPrompt
 from dataclasses import dataclass
 from utils import flatten, unflatten, runBatched
 import vllm
+import pandas as pd
 from typing import Any
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+@dataclass
+class FacetExtraInfo:
+    minValue: int
+    maxValue: int
 
 @dataclass
 class Facet:
     name: str
     question: str
     prefill: str
+    numeric: bool
 
 facets = [
     Facet(
         name="Request",
         question="What is the user’s overall request for the assistant?",
         prefill="The user’s overall request for the assistant is to",
+        numeric=False,
     ),
     Facet(
         name="Language",
         question="What are the main languages of the conversation? Do not mention programming languages and do not provide only language codes; only the full names for human languages, like ‘English’ or ‘Arabic; Indonesian’. Do not include language families (just provide the general language, e.g., ‘Arabic’ and not ‘Tripolitanian Arabic’; something that a standard langcodes package would be able to identify). Only consider languages in or after the human’s first request. Output each language as a single full word with no other commentary.",
         prefill="",
+        numeric=False,
     ),
     Facet(
         name="Task",
         question="What task is the model being asked to perform in this conversation?",
-        prefill="The task is to"
+        prefill="The task is to",
+        numeric=False,
     ),
     Facet(
         name="Concerning",
@@ -45,8 +57,13 @@ Example: Conversations involving potential self-harm or harmful ideation.
 Example: Explicit threats of violence or illegal activities.
 Answer with only a single number from 1 to 5.""",
         prefill="",
+        numeric=(1,5),
     )
 ]
+
+facetExtraInfos = {
+    
+}
 
 def conversationToString(conversation):
     return "\n".join([f"{turn['role']}:\n{turn['content']}" for turn in conversation])
@@ -60,6 +77,70 @@ class FacetValue:
 class ConversationFacetData:
     conversation: list[Any]
     facetValues: list[FacetValue]
+
+@dataclass
+class ConversationEmbedding:
+    conversation: list[Any]
+    embedding: Any
+    
+
+def getModels():
+    model_str = "Qwen/Qwen2.5-7B-Instruct"
+    llm = vllm.LLM(model=model_str)
+    embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
+    return llm, embeddingModel
+
+
+def getData():
+    d = pd.read_parquet("train-00000-of-00006.parquet", engine="pyarrow")
+    return [d.iloc[i].conversation for i in range(len(d))]
+
+
+def runClio(llm, embeddingModel, conversations, llmBatchSize, embedBatchSize, **kwargs):
+    conversationsFacets = getFacets(llm, llm.get_tokenizer(), conversations, llmBatchSize, **kwargs)
+    conversationsEmbedings = getEmbeddings(conversationsFacets, embeddingModel, embedBatchSize)
+    return conversationsFacets, conversationsEmbedings
+
+
+def getEmbeddings(conversationsFacets, embeddingModel, batchSize):
+    def getInputsFunc(conversationFacetData : ConversationFacetData):
+        resultInputs = []
+        for facetValue in conversationFacetData.facetValues:
+            facetInputArr = []
+            if facetValue.facet.numeric == False:
+                facetInputArr.append(facetValue.value)
+            resultInputs.append(facetInputArr)
+        return resultInputs
+    
+    def processBatchFunc(batchOfTextInputs):
+        embedded = embeddingModel.encode(batchOfTextInputs)
+        return [embedded[i] for i in range(len(batchOfTextInputs))]
+
+    def processOutputFunc(conversationFacetData, facetInputs, embeddings):
+        resultEmbeddings = []
+        for facetValue, outputEmbeddings in zip(conversationFacetData.facetValues, embeddings):
+            if facetValue.facet.numeric == False:
+                resultEmbeddings.append(outputEmbeddings[0])
+            else:
+                minValueInclusive, maxValueInclusive = facetValue.facet.numeric
+                try:
+                    intValue = int(facetValue.value.split()[0])
+                except ValueError:
+                    intValue = maxValueInclusive + 1
+                # 1 so it's exclusive, 2 because we also have unknown value
+                outputEmbeddings2 = np.zeros([maxValueInclusive + 2 - minValueInclusive])
+                outputEmbeddings2[:] = -1
+                outputEmbeddings2[intValue-minValueInclusive] = 1
+                # normalize
+                outputEmbeddings2 /= np.sum(outputEmbeddings2)
+                resultEmbeddings.append(outputEmbeddings2)
+        return np.concatenate(resultEmbeddings)
+    
+    return runBatched(conversationsFacets,
+                                       getInputs=getInputsFunc,
+                                       processBatch=processBatchFunc,
+                                       processOutput=processOutputFunc,
+                                       batchSize=batchSize)
 
 
 def getFacets(llm, tokenizer, conversations, batchSize, **kwargs):

@@ -33,7 +33,7 @@ What is your answer to the question <question> {question} </question> about the 
     
     fullPrefill = f"Sure, the privacy-preserving answer to the question about the preceding conversation is: <answer> {prefill}"
     # continue_final_message ensures that we can add our prefill
-    inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
     prompt = tokenizer.decode(inputs['input_ids'][0])
     prompt += fullPrefill
     return prompt
