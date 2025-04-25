@@ -28,58 +28,72 @@ What is your answer to the question <question> {question} </question> about the 
         },
         {
             "role": "assistant",
-            "content": ""
+            "content": f"Sure, the privacy-preserving answer to the question about the preceding conversation is: <answer> {prefill}"
         }]
     
-    fullPrefill = f"Sure, the privacy-preserving answer to the question about the preceding conversation is: <answer> {prefill}"
-    # continue_final_message ensures that we can add our prefill
+    # continue_final_message ensures that we are continuing the final assistant message
     inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
     prompt = tokenizer.decode(inputs['input_ids'][0])
-    prompt += fullPrefill
     return prompt
     
 
-# Generate name and description for cluster, from G.5
-clusterNamePrompt = """You are tasked with summarizing a group of related statements into a short, precise,
-and accurate description and name. Your goal is to create a concise summary
-that captures the essence of these statements and distinguishes them from other
-similar groups of statements.
-Summarize all the statements into a clear, precise, two-sentence description in the
-past tense. Your summary should be specific to this group and distinguish it
-from the contrastive answers of the other groups.
-After creating the summary, generate a short name for the group of statements. This
-name should be at most ten words long (perhaps less) and be specific but also
-reflective of most of the statements (rather than reflecting only one or two).
-The name should distinguish this group from the contrastive examples. For
-instance, "Write fantasy sexual roleplay with octopi and monsters", "Generate
-blog spam for gambling websites", or "Assist with high school math homework"
-would be better and more actionable than general terms like "Write erotic
-content" or "Help with homework". Be as descriptive as possible and assume
-neither good nor bad faith. Do not hesitate to identify and describe socially
-harmful or sensitive topics specifically; specificity is necessary for
-monitoring.
+def getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsideValues):
+    # Generate name and description for cluster, from G.5
+    inClusterStr = "\n".join(clusterFacetValues)
+    outOfClusterStr = "\n".join(clusterOutsideValues)
+
+    messages = [
+        {
+            "role": "system",
+            "content": f"""You are tasked with summarizing a group of related statements into a short, precise, and accurate description and name.
+Your goal is to create a concise summary that captures the essence of these statements and distinguishes them from other similar groups of statements.
+
+Summarize all the statements into a clear, precise, two-sentence description in the past tense.
+Your summary should be specific to this group and distinguish it from the contrastive answers of the other groups.
+
+After creating the summary, generate a short name for the group of statements.
+This name should be at most ten words long (perhaps less) and be specific but also reflective of most of the statements (rather than reflecting only one or two).
+The name should distinguish this group from the contrastive examples.
+For instance,
+"Write fantasy sexual roleplay with octopi and monsters",
+"Generate blog spam for gambling websites", or
+"Assist with high school math homework"
+would be better and more actionable than general terms like
+"Write erotic content" or
+"Help with homework".
+
+Be as descriptive as possible and assume neither good nor bad faith.
+Do not hesitate to identify and describe socially harmful or sensitive topics specifically; specificity is necessary for monitoring.
+
 Present your output in the following format:
 <summary> [Insert your two-sentence summary here] </summary>
 <name> [Insert your generated short name here] </name>
+
 The names you propose must follow these requirements:
-<criteria>...</criteria>
+<criteria> {facet.summaryCriteria} </criteria>
+
 Below are the related statements:
 <answers>
-{answers}
+{inClusterStr}
 </answers>
-For context, here are statements from nearby groups that are NOT part of the group
-you’re summarizing:
-39
+
+For context, here are statements from nearby groups that are NOT part of the group you’re summarizing:
 <contrastive_answers>
-{contrastive_answers}
+{outOfClusterStr}
 </contrastive_answers>
-Do not elaborate beyond what you say in the tags. Remember to analyze both the
-statements and the contrastive statements carefully to ensure your summary and
-name accurately represent the specific group while distinguishing it from
-others.
-Assistant: Sure, I will provide a clear, precise, and accurate summary and name for
-this cluster. I will be descriptive and assume neither good nor bad faith. Here
-is the summary, which I will follow with the name: <summary>"""
+
+Do not elaborate beyond what you say in the tags.
+Remember to analyze both the statements and the contrastive statements carefully to ensure your summary and name accurately represent the specific group while distinguishing it from others.""",
+        },
+        {
+            "role": "assistant",
+            "content": "I will provide a clear, precise, and accurate summary and name for this cluster. I will be descriptive and assume neither good nor bad faith. Here is the summary, which I will follow with the name:\n<summary>"
+        }
+    ]
+    # continue_final_message ensures that we are continuing the final assistant message
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
+    prompt = tokenizer.decode(inputs['input_ids'][0])
+    return prompt
 
 
 
