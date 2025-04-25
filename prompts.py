@@ -4,7 +4,7 @@ def getFacetPrompt(tokenizer, conversation, question, prefill):
     messages = [
         {
             "role": "user",
-            "content": f"Human: The following is a conversation between Claude, an AI assistant, and a user:\n\n{conversation}"
+            "content": f"The following is a conversation between Claude, an AI assistant, and a user:\n\n{conversation}"
         },
         {
             "role": "assistant",
@@ -44,7 +44,7 @@ def getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsi
 
     messages = [
         {
-            "role": "system",
+            "role": "user",
             "content": f"""You are tasked with summarizing a group of related statements into a short, precise, and accurate description and name.
 Your goal is to create a concise summary that captures the essence of these statements and distinguishes them from other similar groups of statements.
 
@@ -98,66 +98,60 @@ Remember to analyze both the statements and the contrastive statements carefully
 
 
 # Proposing cluster names per neighborhood, from G.7.1
-"""Human: You are tasked with creating higher-level cluster names based on a
-given list of clusters and their descriptions. Your goal is to come up
-with broader categories that could encompass one or more of the provided
-clusters.
+def getNeighborhoodClusterNamesPrompt(facet, tokenizer, clusters, desiredNames):
+    clusterStr = "\n".join([f"<cluster> {cluster.name}: {cluster.description}" for cluster in clusters])
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are tasked with creating higher-level cluster names based on a given list of clusters and their descriptions.
+Your goal is to come up with broader categories that could encompass one or more of the provided clusters.
+
 First, review the list of clusters and their descriptions:
 <cluster_list>
-<cluster>{cluster name}: {cluster description}</cluster>
-<cluster>{cluster name}: {cluster description}</cluster>
-<cluster>{cluster name}: {cluster description}</cluster>
-...
+{clusterStr}
 </cluster_list>
-Your task is to create roughly {desired_names} higher-level cluster names
-that could potentially include one or more of the provided clusters.
-These higher-level clusters should represent broader categories or
-themes that emerge from the given clusters, while remaining as specific
-as possible. If there are many clusters with a specific theme, ensure
-that the higher-level cluster name remains the maximum level of
-specificity. You are helping to organize user behavior data in order to
-improve safety, monitoring, and observability. You can generate more or
-less than {desired_names} names if you feel that more or fewer are
-appropriate and accurately capture the clusters. You should output at
-least {int(0.5 * desired_names)} and at most {int(1.5 * desired_names)}
-names, with {desired_names} as a target.
+
+Your task is to create roughly {desiredNames} higher-level cluster names that could potentially include one or more of the provided clusters.
+These higher-level clusters should represent broader categories or themes that emerge from the given clusters, while remaining as specific as possible.
+If there are many clusters with a specific theme, ensure that the higher-level cluster name remains the maximum level of specificity.
+You are helping to organize user behavior data in order to improve safety, monitoring, and observability.
+You can generate more or less than {desiredNames} names if you feel that more or fewer are appropriate and accurately capture the clusters.
+You should output at least {int(0.5 * desiredNames)} and at most {int(1.5 * desiredNames)} names, with {desiredNames} as a target.
+
 Guidelines for creating higher-level cluster names:
-1. Analyze the themes, topics, or characteristics common to multiple
-clusters.
-2. Create names that are specific enough to be meaningful, but not so
-specific that they can’t meaningfully represent many different clusters.
-Avoid overly general or vague terms, and do not hesitate to describe
-socially harmful or sensitive topics (in fact, clusters that clearly
-describe harmful behavior are slightly preferred); specificity is
-necessary for observability and enforcement.
+1. Analyze the themes, topics, or characteristics common to multiple clusters.
+2. Create names that are specific enough to be meaningful, but not so specific that they can’t meaningfully represent many different clusters. Avoid overly general or vague terms, and do not hesitate to describe socially harmful or sensitive topics (in fact, clusters that clearly describe harmful behavior are slightly preferred); specificity is necessary for observability and enforcement.
 3. Ensure that the higher-level cluster names are distinct from one another.
 4. Use clear, concise, and descriptive language for the cluster names.
 Assume neither good nor bad faith for the content in the clusters.
 The names you propose must follow these requirements:
-<criteria>(defined per facet)</criteria>
-Before providing your final list, use a scratchpad to brainstorm and refine
-your ideas. Think about the relationships between the given clusters and
-potential overarching themes.
+<criteria> {facet.summaryCriteria} </criteria>
+Before providing your final list, use a scratchpad to brainstorm and refine your ideas. Think about the relationships between the given clusters and potential overarching themes.
 <scratchpad>
-[Use this space to analyze the clusters, identify common themes, and
-brainstorm potential higher-level cluster names. Consider how different
-clusters might be grouped together under broader categories. No longer
-than a paragraph or two.]
+[Use this space to analyze the clusters, identify common themes, and brainstorm potential higher-level cluster names. Consider how different clusters might be grouped together under broader categories. No longer than a paragraph or two.]
 </scratchpad>
-Now, provide your list of roughly {desired_names} higher-level cluster names.
+Now, provide your list of roughly {desiredNames} higher-level cluster names.
 Present your answer in the following format:
 <answer>
 1. [First higher-level cluster name]
 2. [Second higher-level cluster name]
 3. [Third higher-level cluster name]
 ...
-{desired_names}. [Last higher-level cluster name]
+{desiredNames}. [Last higher-level cluster name]
 </answer>
-Focus on creating meaningful, distinct, and precise (but not overly specific
-) higher-level cluster names that could encompass multiple sub-clusters.
-Assistant: I understand. I’ll evaluate the clusters and provide higher-level
-cluster names that could encompass multiple sub-clusters.
-<scratchpad>"""
+Focus on creating meaningful, distinct, and precise (but not overly specific) higher-level cluster names that could encompass multiple sub-clusters."""
+        },
+        {
+            "role": "assistant",
+            "content": "I understand. I’ll evaluate the clusters and provide higher-level cluster names that could encompass multiple sub-clusters.\n<scratchpad>"
+        }
+    ]
+    # continue_final_message ensures that we are continuing the final assistant message
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
+    prompt = tokenizer.decode(inputs['input_ids'][0])
+    return prompt
+
+
 
 # Deduplicating cluster names across neighborhoods, from G.7.1
 dedupClusterNamePrompt = """Human: You are tasked with deduplicating a list of cluster names into a

@@ -1,5 +1,5 @@
 import prompts
-from prompts import getFacetPrompt, getFacetClusterNamePrompt
+from prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt
 from dataclasses import dataclass
 from utils import flatten, unflatten, runBatched
 import vllm
@@ -11,6 +11,7 @@ from sklearn.cluster import KMeans
 from scipy.spatial.distance import cdist
 from collections import defaultdict
 import re
+import random
 
 @dataclass
 class FacetExtraInfo:
@@ -106,8 +107,22 @@ def getData():
     return [d.iloc[i].conversation for i in range(len(d))]
 
 # facets, embeds, kmeans, clusters = clio.runClio(clio.facets, llm, embed, d[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, seed=27, max_tokens=1000)
-def runClio(facets, llm, embeddingModel, conversations, llmBatchSize, embedBatchSize, numberOfBaseClusters, nPointsToSample, nLLMSamplesPerCluster, seed, **kwargs):
+def runClio(facets, 
+            llm,
+            embeddingModel,
+            conversations,
+            llmBatchSize,
+            embedBatchSize,
+            numberOfBaseClusters,
+            nPointsToSample,
+            nLLMSamplesPerCluster,
+            nClustersOutside, # idk what they picked they didn't say
+            seed,
+            conversationsFacets=None,
+            conversationsEmbedings=None,
+            **kwargs):
     np.random.seed(seed)
+    random.seed(seed)
     print("Getting facets")
     conversationsFacets = getFacets(
         facets=facets, 
@@ -115,13 +130,13 @@ def runClio(facets, llm, embeddingModel, conversations, llmBatchSize, embedBatch
         tokenizer=llm.get_tokenizer(),
         conversations=conversations,
         batchSize=llmBatchSize,
-        seed=seed, **kwargs)
+        seed=seed, **kwargs) if conversationsFacets is None else conversationsFacets
     print("Getting embeddings")
     conversationsEmbedings = getEmbeddings(
         facets=facets,
         conversationsFacets=conversationsFacets,
         embeddingModel=embeddingModel,
-        batchSize=embedBatchSize)
+        batchSize=embedBatchSize) if conversationsEmbedings is None else conversationsEmbedings
     print("Getting base clusters")
     kMeans, baseClusters = getBaseClusters(
         facets=facets,
@@ -134,17 +149,97 @@ def runClio(facets, llm, embeddingModel, conversations, llmBatchSize, embedBatch
         batchSize=llmBatchSize,
         seed=seed,
         **kwargs)
+    
+    hierarchy = getHierarchy(
+        facets=facets,
+        llm=llm,
+        tokenizer=llm.get_tokenizer(),
+        embeddingModel=embeddingModel,
+        baseClusters=baseClusters,
+        nClustersOutside=nClustersOutside,
+        nLLMSamplesPerCluster=nLLMSamplesPerCluster,
+        seed=seed
+    )
+
     return conversationsFacets, conversationsEmbedings, kMeans, baseClusters
 
-def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, numberOfBaseClusters, seed, nPointsToSample, nLLMSamplesPerCluster, batchSize, **kwargs):
+def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClustersOutside, nLLMSamplesPerCluster, seed):
+    
+    curLevelClusters = baseClusters
+    #### Get embeddings for clusters ####
+    def getInputsFunc(facetI):
+        facet = facets[facetI]
+        clusterEmbedPrompts = []
+        if shouldMakeFacetClusters(facet):
+            clusters = curLevelClusters[facetI]
+            for cluster in clusters:
+                clusterEmbedPrompts.append(f"{cluster.name}\n{cluster.summary}")
+        return clusterEmbedPrompts
+    
+    def processBatchFunc(batchOfTextInputs):
+        embedded = embeddingModel.encode(batchOfTextInputs)
+        return [embedded[i] for i in range(len(batchOfTextInputs))]
 
+    def processOutputFunc(facetI, clusterEmbedPrompts, outputEmbeddings):
+        facet = facets[facetI]
+        if shouldMakeFacetClusters(facet):
+            return np.stack(outputEmbeddings)
+        else:
+            return None
+
+    clusterEmbeddings = runBatched(list(range(len(facets))),
+                                   getInputs=getInputsFunc,
+                                   processBatch=processBatchFunc,
+                                   processOutput=processOutputFunc)
+    
+
+    level = 0
+    def getInputsFunc(facetI):
+        facet = facets[facetI]
+        allClusterPrompts = []
+        if shouldMakeFacetClusters(facet):
+            print(f"Finding neighbors for facet {facet.name} on level {level}")
+            facetClusterEmbeddings = clusterEmbeddings[facetI]
+            numClusters = facetClusterEmbeddings.shape[0]
+            # from G.7 we want about 40 per item
+            newK = numClusters // 40
+            kmeans = KMeans(n_clusters=newK, random_state=seed)
+            kmeans.fit(facetClusterEmbeddings)
+            distances = cdist(facetClusterEmbeddings, kmeans.cluster_centers_)
+            for cluster_idx in range(len(kmeans.cluster_centers_)):
+                # Get points belonging to this cluster
+                clusterPointsIndices = np.where(kmeans.labels_ == cluster_idx)[0]
+                # Get closest points not in this cluster
+                outsideClusterIndices = np.where(kmeans.labels_ != cluster_idx)[0]
+                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != cluster_idx, cluster_idx])]
+                # From G.7:
+                # "Including the nearest clusters beyond the neighborhood ensures that clusters (or groups of clusters)
+                #  on the boundary between neighborhoods are neither overcounted nor undercounted"
+                clusterIndicesInNeighborhood = list(clusterPointsIndices) + list(closestPointsOutsideClusterIndices[:nClustersOutside])
+                clustersInNeighborhood = [curLevelClusters[i] for i in clusterIndicesInNeighborhood]
+                clusterPrompts = []
+                for _ in range(nLLMSamplesPerCluster):
+                    # shuffle ordering
+                    random.shuffle(clustersInNeighborhood)
+                    clusterPrompts.append(getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood))
+                allClusterPrompts.append(clusterPrompts)
+            
+
+
+
+
+    # list(enumerate(zip(facets, baseClusters)))
+
+
+
+def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, numberOfBaseClusters, seed, nPointsToSample, nLLMSamplesPerCluster, batchSize, **kwargs):
     tokenizer = llm.get_tokenizer()
     kMeansFacets = []
     def getInputsFunc(facetAndEmbeddings):
         lookupClusterPrompts = []
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
-        if shouldMakeFacetEmbedding(facet):
-            print(f"Running kmeans for facet {facet}")
+        if shouldMakeFacetClusters(facet):
+            print(f"Running kmeans for facet {facet.name}")
             kmeans = KMeans(n_clusters=numberOfBaseClusters, random_state=seed)
             kmeans.fit(facetEmbeddings)
             distances = cdist(facetEmbeddings, kmeans.cluster_centers_)
@@ -153,16 +248,23 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
             # For each cluster, find the index of the closest point
             for cluster_idx in range(len(kmeans.cluster_centers_)):
                 # Get points belonging to this cluster
-                clusterPointsIndices = np.arange(len(conversationsFacets))[kmeans.labels_ == cluster_idx]
+                clusterPointsIndices = np.where(kmeans.labels_ == cluster_idx)[0]
                 sampledClusterIndices = np.random.choice(clusterPointsIndices, size=min(nPointsToSample, clusterPointsIndices.shape[0]), replace=False)
                 # Get closest points not in this cluster
-                closestPointsOutsideClusterIndices = np.argsort(distances[kmeans.labels_ != cluster_idx, cluster_idx])
+                outsideClusterIndices = np.where(kmeans.labels_ != cluster_idx)[0]
+                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != cluster_idx, cluster_idx])]
                 sampledOutsideClusterIndices = closestPointsOutsideClusterIndices[:min(nPointsToSample, clusterPointsIndices.shape[0])]
+
+                # grab the facet values
                 clusterFacetValues = [conversationsFacets[i].facetValues[facetI].value for i in clusterPointsIndices]
                 clusterOutsideValues = [conversationsFacets[i].facetValues[facetI].value for i in sampledOutsideClusterIndices]
                 print(clusterFacetValues)
+                # generate the cluster name prompt
                 clusterPrompts = []
                 for _ in range(nLLMSamplesPerCluster):
+                    # randomize the ordering to avoid positional biases
+                    random.shuffle(clusterFacetValues)
+                    random.shuffle(clusterOutsideValues)
                     prompt = getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsideValues)
                     clusterPrompts.append(prompt)
                 lookupClusterPrompts.append(clusterPrompts)
@@ -180,7 +282,7 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
     def processOutputFunc(facetAndEmbeddings, clusterPrompts, outputs):
         outputClusters = []
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
-        if shouldMakeFacetEmbedding(facet):
+        if shouldMakeFacetClusters(facet):
             kmeans = kMeansFacets[facetI]
             for cluster_idx, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), outputs):
                 clusterPointsIndices = np.arange(len(conversationsFacets))[kmeans.labels_ == cluster_idx]
@@ -216,44 +318,36 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
                processOutput=processOutputFunc,
                batchSize=batchSize)
 
-def shouldMakeFacetEmbedding(facet):
+def shouldMakeFacetClusters(facet):
     return facet.summaryCriteria is not None
 
 def getEmbeddings(facets, conversationsFacets, embeddingModel, batchSize):
-    def getInputsFunc(conversationFacetData : ConversationFacetData):
-        resultInputs = []
-        for facetValue in conversationFacetData.facetValues:
-            facetInputArr = []
-            if shouldMakeFacetEmbedding(facetValue.facet):
-                facetInputArr.append(facetValue.value)
-            resultInputs.append(facetInputArr)
-        return resultInputs
+    def getInputsFunc(facetI):
+        facetInputs = []
+        facet = facets[facetI]
+        if shouldMakeFacetClusters(facet):
+            for conversationFacetData in conversationsFacets:
+                facetValue = conversationFacetData.facetValues[facetI]
+                facetInputs.append(facetValue)
+        return facetInputs
     
     def processBatchFunc(batchOfTextInputs):
         embedded = embeddingModel.encode(batchOfTextInputs)
         return [embedded[i] for i in range(len(batchOfTextInputs))]
 
-    def processOutputFunc(conversationFacetData, facetInputs, embeddings):
-        return embeddings
+    def processOutputFunc(facetI, facetInputs, embeddings):
+        facet = facets[facetI]
+        if shouldMakeFacetClusters(facet):
+            return np.stack(embeddings)
+        else:
+            return None
     
-    outputEmbeddings = runBatched(conversationsFacets,
-                                       getInputs=getInputsFunc,
-                                       processBatch=processBatchFunc,
-                                       processOutput=processOutputFunc,
-                                       batchSize=batchSize)
-    # make one large numpy array for each facet that has embeddings
-    numFacets = len(facets)
-    resultEmbeddings = [[] for _ in range(numFacets)]
-    for facetData, embeddings in zip(conversationsFacets, outputEmbeddings):
-        for facetI, (facetValue, embedding) in enumerate(zip(facetData.facetValues, embeddings)):
-            if shouldMakeFacetEmbedding(facetValue.facet):
-                resultEmbeddings[facetI].append(embedding[0])
-    for facetI in range(numFacets):
-        if len(resultEmbeddings[facetI]) > 0:
-            resultEmbeddings[facetI] = np.stack(resultEmbeddings[facetI])
+    return runBatched(list(range(len(facets))),
+                    getInputs=getInputsFunc,
+                    processBatch=processBatchFunc,
+                    processOutput=processOutputFunc,
+                    batchSize=batchSize)
 
-    return resultEmbeddings
-        
 def cleanOutput(output):
     return re.findall(r"(.*?)(?:(?:</)|$)", output.strip())[0].strip()
 
