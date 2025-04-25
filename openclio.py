@@ -105,17 +105,38 @@ def getData():
     d = pd.read_parquet("train-00000-of-00006.parquet", engine="pyarrow")
     return [d.iloc[i].conversation for i in range(len(d))]
 
-
+# facets, embeds, kmeans, clusters = clio.runClio(clio.facets, llm, embed, d[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, seed=27, max_tokens=1000)
 def runClio(facets, llm, embeddingModel, conversations, llmBatchSize, embedBatchSize, numberOfBaseClusters, nPointsToSample, nLLMSamplesPerCluster, seed, **kwargs):
+    np.random.seed(seed)
     print("Getting facets")
-    conversationsFacets = getFacets(facets, llm, llm.get_tokenizer(), conversations, llmBatchSize, seed, **kwargs)
+    conversationsFacets = getFacets(
+        facets=facets, 
+        llm=llm,
+        tokenizer=llm.get_tokenizer(),
+        conversations=conversations,
+        batchSize=llmBatchSize,
+        seed=seed, **kwargs)
     print("Getting embeddings")
-    conversationsEmbedings = getEmbeddings(facets, conversationsFacets, embeddingModel, embedBatchSize)
+    conversationsEmbedings = getEmbeddings(
+        facets=facets,
+        conversationsFacets=conversationsFacets,
+        embeddingModel=embeddingModel,
+        batchSize=embedBatchSize)
     print("Getting base clusters")
-    kMeans, baseClusters = getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, numberOfBaseClusters, seed, nPointsToSample, nLLMSamplesPerCluster, llmBatchSize, **kwargs)
+    kMeans, baseClusters = getBaseClusters(
+        facets=facets,
+        llm=llm,
+        conversationsFacets=conversationsFacets,
+        conversationsEmbedings=conversationsEmbedings,
+        numberOfBaseClusters=numberOfBaseClusters,
+        nPointsToSample=nPointsToSample,
+        nLLMSamplesPerCluster=nLLMSamplesPerCluster,
+        batchSize=llmBatchSize,
+        seed=seed,
+        **kwargs)
     return conversationsFacets, conversationsEmbedings, kMeans, baseClusters
 
-def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, numberOfBaseClusters, seed, nPointsToSample, nLLMSamplesPerCluster, llmBatchSize, **kwargs):
+def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, numberOfBaseClusters, seed, nPointsToSample, nLLMSamplesPerCluster, batchSize, **kwargs):
 
     tokenizer = llm.get_tokenizer()
     kMeansFacets = []
@@ -152,7 +173,7 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
     def processBatchFunc(batchOfPrompts):
         nonlocal seed
         seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, *kwargs)
+        samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
         modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
@@ -174,7 +195,7 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
                             nameCounts[cleanOutput(name)] += 1
                 def largestCountItem(counts):
                     if len(counts) == 0: return "<Could not extract summary>"
-                    counts = sorted(list(counts.items(), key=lambda x: (-x[1], x[0])))
+                    counts = sorted(list(counts.items()), key=lambda x: (-x[1], x[0]))
                     largestKey, largestValue = counts[0]
                     return largestKey
                 summary = largestCountItem(summaryCounts)
@@ -189,11 +210,11 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
                 )
         return outputClusters
 
-    return kMeansFacets, runBatched(enumerate(zip(facets, conversationsEmbedings)),
+    return kMeansFacets, runBatched(list(enumerate(zip(facets, conversationsEmbedings))),
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,
-               batchSize=llmBatchSize)
+               batchSize=batchSize)
 
 def shouldMakeFacetEmbedding(facet):
     return facet.summaryCriteria is not None
@@ -247,7 +268,7 @@ def getFacets(facets, llm, tokenizer, conversations, batchSize, seed, **kwargs):
     def processBatchFunc(batchOfPrompts):
         nonlocal seed
         seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, *kwargs)
+        samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
         modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
