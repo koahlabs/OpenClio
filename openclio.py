@@ -8,6 +8,7 @@ from typing import Any, Union, Tuple, Optional
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn.cluster import KMeans
+from sklearn import preprocessing
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import cdist
 from collections import defaultdict
@@ -228,7 +229,7 @@ def getNeighborhoods(facets, valuesPerFacet, valueMap, embeddingModel, embedBatc
             # from G.7 we want about 40 per item
             k = kFunc(numClusters)
             kmeans = KMeans(n_clusters=k, random_state=seed)
-            kmeans.fit(facetClusterEmbeddings)
+            kmeans.fit(preprocessing.normalize(facetClusterEmbeddings))
             distances = cdist(facetClusterEmbeddings, kmeans.cluster_centers_)
             for clusterIndex in range(len(kmeans.cluster_centers_)):
                 # Get points belonging to this cluster
@@ -334,7 +335,7 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
                     # shuffle ordering
                     random.shuffle(higherCategoriesInNeighborhood)
                     # idk desiredNames I guessed here
-                    higherCategoryPrompts.append(getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, len(higherCategoriesInNeighborhood)-1))
+                    higherCategoryPrompts.append(getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, max(1, len(higherCategoriesInNeighborhood)-1)))
                 
                 allHigherCategoryPrompts.append(higherCategoryPrompts)
         return allHigherCategoryPrompts
@@ -381,7 +382,7 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
         if shouldMakeFacetClusters(facet):
             print(f"Running kmeans for facet {facet.name}")
             kmeans = KMeans(n_clusters=numberOfBaseClusters, random_state=seed)
-            kmeans.fit(facetEmbeddings)
+            kmeans.fit(preprocessing.normalize(facetEmbeddings))
             distances = cdist(facetEmbeddings, kmeans.cluster_centers_)
             kMeansFacets.append(kmeans)
 
@@ -492,6 +493,9 @@ def extractAnswerNumberedList(output):
     posOfAnswer = output.lower().find("<answer>")
     if posOfAnswer != -1:
         output = output[posOfAnswer + len("<answer>"):].strip()
+        endOfAnswerPos = output.lower().find("</answer>")
+        if endOfAnswerPos != -1:
+            output = output[:endOfAnswerPos]
         # answer> is to remove </answer>, we don't want to use cleanOutput in case it has </ in it
         results += [removeNumberFromOutput(line) for line in output.split("\n") if len(line.strip()) >= 0 and not "answer>" in line]
     return results
