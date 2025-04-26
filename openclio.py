@@ -1,5 +1,5 @@
 import prompts
-from prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt
+from prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt, getDeduplicateClusterNamesPrompt
 from dataclasses import dataclass
 from utils import flatten, unflatten, runBatched
 import vllm
@@ -121,6 +121,8 @@ def runClio(facets,
             seed,
             conversationsFacets=None,
             conversationsEmbedings=None,
+            kMeans=None,
+            baseClusters=None,
             **kwargs):
     np.random.seed(seed)
     random.seed(seed)
@@ -139,6 +141,7 @@ def runClio(facets,
         embeddingModel=embeddingModel,
         batchSize=embedBatchSize) if conversationsEmbedings is None else conversationsEmbedings
     print("Getting base clusters")
+   
     kMeans, baseClusters = getBaseClusters(
         facets=facets,
         llm=llm,
@@ -149,7 +152,7 @@ def runClio(facets,
         nLLMSamplesPerCluster=nLLMSamplesPerCluster,
         batchSize=llmBatchSize,
         seed=seed,
-        **kwargs)
+        **kwargs) if kMeans is None or baseClusters is None else (kMeans, baseClusters)
     print("Getting higher level clusters")
     higherCategories = getHierarchy(
         facets=facets,
@@ -160,22 +163,22 @@ def runClio(facets,
         nClustersOutside=nClustersOutside,
         nLLMSamplesPerCluster=nLLMSamplesPerCluster,
         desiredNames=desiredNames,
-        seed=seed
+        embedBatchSize=embedBatchSize,
+        llmBatchSize=llmBatchSize,
+        seed=seed,
+        **kwargs
     )
 
     return conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories
 
-def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClustersOutside, nLLMSamplesPerCluster, desiredNames, seed):
+def getNeighborhoods(facets, valuesPerFacet, valueMap, embeddingModel, embedBatchSize, kFunc, nClustersOutside, seed):
     
-    curLevelClusters = baseClusters
-    #### Get embeddings for clusters ####
     def getInputsFunc(facetI):
         facet = facets[facetI]
         clusterEmbedPrompts = []
         if shouldMakeFacetClusters(facet):
-            clusters = curLevelClusters[facetI]
-            for cluster in clusters:
-                clusterEmbedPrompts.append(f"{cluster.name}\n{cluster.summary}")
+            for value in valuesPerFacet[facetI]:
+                clusterEmbedPrompts.append(valueMap(value))
         return clusterEmbedPrompts
     
     def processBatchFunc(batchOfTextInputs):
@@ -193,35 +196,69 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
     clusterEmbeddings = runBatched(list(range(len(facets))),
                                    getInputs=getInputsFunc,
                                    processBatch=processBatchFunc,
-                                   processOutput=processOutputFunc)
+                                   processOutput=processOutputFunc,
+                                   batchSize=embedBatchSize)
     
 
     #### Get higher level category names ####
-    kmeansOutputs = [None for _ in range(len(facets))]
-    def getInputsFunc(facetI):
+    kMeansOutputs = []
+    neighborhoods = []
+    for facetI, facet in enumerate(facets):
         facet = facets[facetI]
-        allClusterPrompts = []
+        facetNeighborhoods = []
+        kmeans = None
         if shouldMakeFacetClusters(facet):
-            print(f"Finding neighbors for facet {facet.name} on level {level}")
+            print(f"Finding neighbors for facet {facet.name}")
             facetClusterEmbeddings = clusterEmbeddings[facetI]
             numClusters = facetClusterEmbeddings.shape[0]
             # from G.7 we want about 40 per item
-            newK = numClusters // 40
-            kmeans = KMeans(n_clusters=newK, random_state=seed)
+            k = kFunc(numClusters)
+            kmeans = KMeans(n_clusters=k, random_state=seed)
             kmeans.fit(facetClusterEmbeddings)
-            kmeansOutputs[facetI] = kmeans
             distances = cdist(facetClusterEmbeddings, kmeans.cluster_centers_)
-            for cluster_idx in range(len(kmeans.cluster_centers_)):
+            for clusterIndex in range(len(kmeans.cluster_centers_)):
                 # Get points belonging to this cluster
-                clusterPointsIndices = np.where(kmeans.labels_ == cluster_idx)[0]
+                clusterPointsIndices = np.where(kmeans.labels_ == clusterIndex)[0]
                 # Get closest points not in this cluster
-                outsideClusterIndices = np.where(kmeans.labels_ != cluster_idx)[0]
-                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != cluster_idx, cluster_idx])]
+                outsideClusterIndices = np.where(kmeans.labels_ != clusterIndex)[0]
+                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != clusterIndex, clusterIndex])]
                 # From G.7:
                 # "Including the nearest clusters beyond the neighborhood ensures that clusters (or groups of clusters)
                 #  on the boundary between neighborhoods are neither overcounted nor undercounted"
                 clusterIndicesInNeighborhood = list(clusterPointsIndices) + list(closestPointsOutsideClusterIndices[:nClustersOutside])
-                clustersInNeighborhood = [curLevelClusters[i] for i in clusterIndicesInNeighborhood]
+                facetNeighborhoods.append(clusterIndicesInNeighborhood)
+        kMeansOutputs.append(kmeans)
+        neighborhoods.append(facetNeighborhoods)
+
+    return kMeansOutputs, neighborhoods
+
+def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClustersOutside, nLLMSamplesPerCluster, desiredNames, embedBatchSize, llmBatchSize, seed, **kwargs):
+    
+    curLevelClusters = baseClusters
+    nLLMSamplesPerCluster = 1 # we don't need to sample these multiple times I think, that'll give too many duplicates
+    #### Get embeddings for clusters ####
+    print("getting category neighborhoods")
+    def valueMap(cluster):
+        return f"{cluster.name}\n{cluster.summary}"
+    kMeansNeighborhoods, facetNeighborhoods = getNeighborhoods(facets,
+                valuesPerFacet=curLevelClusters,
+                valueMap=valueMap,
+                embeddingModel=embeddingModel,
+                embedBatchSize=embedBatchSize,
+                kFunc=lambda n: max(1, n//40),
+                nClustersOutside=nClustersOutside,
+                seed=seed)
+
+    #### Get higher level category names ####
+    print("getting higher level category names")
+    def getInputsFunc(facetI):
+        facet = facets[facetI]
+        allClusterPrompts = []
+        if shouldMakeFacetClusters(facet):
+            kmeans = kMeansNeighborhoods[facetI]
+            for clusterIndex in range(len(kmeans.cluster_centers_)):
+                clusterIndicesInNeighborhood = facetNeighborhoods[facetI][clusterIndex]
+                clustersInNeighborhood = [curLevelClusters[facetI][i] for i in clusterIndicesInNeighborhood]
                 clusterPrompts = []
                 for _ in range(nLLMSamplesPerCluster):
                     # shuffle ordering
@@ -230,41 +267,87 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
                     clusterPrompts.append(getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, desiredNames))
                 
                 allClusterPrompts.append(clusterPrompts)
-        
+        return allClusterPrompts
     
     def processBatchFunc(clusterPrompts):
         nonlocal seed
         seed += 1
         samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
-        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+        modelOutputs = llm.generate(clusterPrompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
     
     def processOutputFunc(facetI, clusterPrompts, clusterNamesOutputs):
         facet = facets[facetI]
-        higherCategories = []
+        higherCategories = set()
         if shouldMakeFacetClusters(facet): 
-            kmeans = kmeansOutputs[facetI]
-            for cluster_idx, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), clusterNamesOutputs):
+            kmeans = kMeansNeighborhoods[facetI]
+            for clusterOutputs in clusterNamesOutputs:
                 for output in clusterOutputs:
-                    posOfAnswer = output.lower().find("<answer>")
-                    if posOfAnswer != -1:
-                        posOfAnswer = cleanOutput(output[posOfAnswer + len("<answer>"):])
-                        answers = [re.sub("^\d*?\.", "", line.strip(), count=1) for line in posOfAnswer.split("\n") if len(line.strip()) >= 0]
-                        for answer in answers:
-                            higherCategories.apppend(answer)
-        return higherCategories
+                    higherCategories |= set(extractAnswerNumberedList(output))
+        return sorted(list(higherCategories))
+
 
     higherCategories = runBatched(list(range(len(facets))),
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,
-               batchSize=batchSize)
+               batchSize=llmBatchSize)
 
-    return higherCategories
     
+    #### Dedup higher categories ####
+    
+    print("getting higher level category neighborhoods")
+    kMeansNeighborhoods, facetNeighborhoods = getNeighborhoods(facets,
+                valuesPerFacet=higherCategories,
+                valueMap=lambda categoryName: categoryName,
+                embeddingModel=embeddingModel,
+                embedBatchSize=embedBatchSize,
+                kFunc=lambda n: n//5, # picked this arbitrairly
+                nClustersOutside=0, # picked this arbitrairly
+                seed=seed)
+    
+    print("deduping higher level categories")
+    def getInputsFunc(facetI):
+        facet = facets[facetI]
+        allHigherCategoryPrompts = []
+        if shouldMakeFacetClusters(facet):
+            kmeans = kMeansNeighborhoods[facetI]
+            for clusterIndex in range(len(kmeans.cluster_centers_)):
+                higherCategoryIndicesInNeighborhoods = facetNeighborhoods[facetI][clusterIndex]
+                higherCategoriesInNeighborhood = [higherCategories[facetI][i] for i in higherCategoryIndicesInNeighborhoods]
+                higherCategoryPrompts = []
+                for _ in range(nLLMSamplesPerCluster):
+                    # shuffle ordering
+                    random.shuffle(higherCategoriesInNeighborhood)
+                    # idk desiredNames I guessed here
+                    higherCategoryPrompts.append(getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, len(higherCategoriesInNeighborhood)-1))
+                
+                allHigherCategoryPrompts.append(higherCategoryPrompts)
+        return allHigherCategoryPrompts
+    
+    def processBatchFunc(clusterPrompts):
+        nonlocal seed
+        seed += 1
+        samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
+        modelOutputs = llm.generate(clusterPrompts, sampling_params=samplingParams, use_tqdm=False)
+        return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
+    
+    def processOutputFunc(facetI, clusterPrompts, clusterNamesOutputs):
+        facet = facets[facetI]
+        higherCategories = set()
+        if shouldMakeFacetClusters(facet): 
+            kmeans = kMeansNeighborhoods[facetI]
+            for clusterOutputs in clusterNamesOutputs:
+                for output in clusterOutputs:
+                    higherCategories |= set(extractAnswerNumberedList(output))
+        return sorted(list(higherCategories))
 
-
-    # list(enumerate(zip(facets, baseClusters)))
+    dedupedCategories = runBatched(list(range(len(facets))),
+            getInputs=getInputsFunc,
+            processBatch=processBatchFunc,
+            processOutput=processOutputFunc,
+            batchSize=llmBatchSize)
+    return higherCategories, dedupedCategories
 
 
 
@@ -282,13 +365,13 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
             kMeansFacets.append(kmeans)
 
             # For each cluster, find the index of the closest point
-            for cluster_idx in range(len(kmeans.cluster_centers_)):
+            for clusterIndex in range(len(kmeans.cluster_centers_)):
                 # Get points belonging to this cluster
-                clusterPointsIndices = np.where(kmeans.labels_ == cluster_idx)[0]
+                clusterPointsIndices = np.where(kmeans.labels_ == clusterIndex)[0]
                 sampledClusterIndices = np.random.choice(clusterPointsIndices, size=min(nPointsToSample, clusterPointsIndices.shape[0]), replace=False)
                 # Get closest points not in this cluster
-                outsideClusterIndices = np.where(kmeans.labels_ != cluster_idx)[0]
-                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != cluster_idx, cluster_idx])]
+                outsideClusterIndices = np.where(kmeans.labels_ != clusterIndex)[0]
+                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != clusterIndex, clusterIndex])]
                 sampledOutsideClusterIndices = closestPointsOutsideClusterIndices[:min(nPointsToSample, clusterPointsIndices.shape[0])]
 
                 # grab the facet values
@@ -319,8 +402,8 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
         if shouldMakeFacetClusters(facet):
             kmeans = kMeansFacets[facetI]
-            for cluster_idx, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), outputs):
-                clusterPointsIndices = np.arange(len(conversationsFacets))[kmeans.labels_ == cluster_idx]
+            for clusterIndex, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), outputs):
+                clusterPointsIndices = np.arange(len(conversationsFacets))[kmeans.labels_ == clusterIndex]
                 summaryCounts = defaultdict(lambda: 0)
                 nameCounts = defaultdict(lambda: 0)
                 for output in clusterOutputs:
@@ -383,8 +466,20 @@ def getEmbeddings(facets, conversationsFacets, embeddingModel, batchSize):
                     processOutput=processOutputFunc,
                     batchSize=batchSize)
 
+def extractAnswerNumberedList(output):
+    results = []
+    posOfAnswer = output.lower().find("<answer>")
+    if posOfAnswer != -1:
+        output = output[posOfAnswer + len("<answer>"):].strip()
+        # answer> is to remove </answer>, we don't want to use cleanOutput in case it has </ in it
+        results += [removeNumberFromOutput(line) for line in output.split("\n") if len(line.strip()) >= 0 and not "answer>" in line]
+    return results
+
+def removeNumberFromOutput(output):
+    return re.sub(r"^\d*?\.", "", output.strip(), count=1).strip()
+
 def cleanOutput(output):
-    return re.findall(r"(.*?)(?:(?:</)|$)", output.strip())[0].strip()
+    return re.findall(r"(.*?)(?:(?:</)|$)", output.strip(), re.DOTALL)[0].strip()
 
 def getFacets(facets, llm, tokenizer, conversations, batchSize, seed, **kwargs):
     def getInputsFunc(conversation):

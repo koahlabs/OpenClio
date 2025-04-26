@@ -99,7 +99,7 @@ Remember to analyze both the statements and the contrastive statements carefully
 
 # Proposing cluster names per neighborhood, from G.7.1
 def getNeighborhoodClusterNamesPrompt(facet, tokenizer, clusters, desiredNames):
-    clusterStr = "\n".join([f"<cluster> {cluster.name}: {cluster.description}" for cluster in clusters])
+    clusterStr = "\n".join([f"<cluster> {cluster.name}: {cluster.summary} </cluster>" for cluster in clusters])
     messages = [
         {
             "role": "user",
@@ -152,57 +152,40 @@ Focus on creating meaningful, distinct, and precise (but not overly specific) hi
     return prompt
 
 
-
 # Deduplicating cluster names across neighborhoods, from G.7.1
-dedupClusterNamePrompt = """Human: You are tasked with deduplicating a list of cluster names into a
-smaller set of distinct cluster names. Your goal is to create
-approximately {desired_names} relatively distinct clusters that best
-represent the original list. You are helping to organize user behavior
-data in order to improve safety, monitoring, and observability. Here are
-the inputs:
+def getDeduplicateClusterNamesPrompt(facet, tokenizer, clusters, desiredNames):
+    clusterStr = "\n".join([f"<cluster> {cluster} </cluster>" for cluster in clusters])
+    # I modified to no less than 1 in case it has lots of the same thing
+    messages = [
+        {
+            "role": "user",
+            "content": f"""You are tasked with deduplicating a list of cluster names into a smaller set of distinct cluster names.
+Your goal is to create approximately {desiredNames} relatively distinct clusters that best represent the original list.
+You are helping to organize user behavior data in order to improve safety, monitoring, and observability.
+
+Here are the inputs:
 <cluster_names>
-<cluster> {cluster_name_1} </cluster>
-<cluster> {cluster_name_2} </cluster>
-<cluster> {cluster_name_3} </cluster>
+{clusterStr}
 </cluster_names>
-Number of distinct clusters to create: approximately {desired_names}
+
+Number of distinct clusters to create: approximately {desiredNames}
 Follow these steps to complete the task:
-1. Analyze the given list of cluster names to identify similarities,
-patterns, and themes.
-2. Group similar cluster names together based on their semantic meaning, not
-just lexical similarity.
-3. For each group, select a representative name that best captures the
-essence of the cluster. This can be one of the original names or a new
-name that summarizes the group effectively. Do not just pick the most
-vague or generic name.
-4. Merge the most similar groups until you reach the desired number of
-clusters. Maintain as much specificity as possible while merging.
-6. Ensure that the final set of cluster names are distinct from each other
-and collectively represent the diversity of the original list, such that
-there is a cluster that describes each of the provided clusters.
-7. If you create new names for any clusters, make sure they are clear,
-concise, and reflective of the contents they represent.
-42
-8. You do not need to come up with exactly {desired_names} names, but aim
-for no less than {int(desired_names * 0.5)} and no more than {int(
-desired_names * 1.5)}. Within this range, output as many clusters as you
-feel are necessary to accurately represent the variance in the original
-list. Avoid outputting duplicate or near-duplicate clusters.
-9. Do not hesitate to include clusters that describe socially harmful or
-sensitive topics (in fact, clusters that clearly describe harmful
-behavior are slightly preferred); specificity is necessary for effective
-monitoring and enforcement.
-10. Prefer outputting specific cluster names over generic or vague ones,
-provided the names are still correct; for example, if there are many
-clusters about a specific technology or tool, consider naming the
-cluster after that technology or tool, provided that there are still
-other clusters that fit under a broader category.
+1. Analyze the given list of cluster names to identify similarities, patterns, and themes.
+2. Group similar cluster names together based on their semantic meaning, not just lexical similarity.
+3. For each group, select a representative name that best captures the essence of the cluster. This can be one of the original names or a new name that summarizes the group effectively. Do not just pick the most vague or generic name.
+4. Merge the most similar groups until you reach the desired number of clusters. Maintain as much specificity as possible while merging.
+5. Ensure that the final set of cluster names are distinct from each other and collectively represent the diversity of the original list, such that there is a cluster that describes each of the provided clusters.
+6. If you create new names for any clusters, make sure they are clear, concise, and reflective of the contents they represent.
+7. You do not need to come up with exactly {desiredNames} names, but aim for no less than {1} and no more than {int(
+desiredNames * 1.5)}. Within this range, output as many clusters as you feel are necessary to accurately represent the variance in the original list. Avoid outputting duplicate or near-duplicate clusters.
+9. Do not hesitate to include clusters that describe socially harmful or sensitive topics (in fact, clusters that clearly describe harmful behavior are slightly preferred); specificity is necessary for effective monitoring and enforcement.
+10. Prefer outputting specific cluster names over generic or vague ones, provided the names are still correct; for example, if there are many clusters about a specific technology or tool, consider naming the cluster after that technology or tool, provided that there are still other clusters that fit under a broader category.
+
 The names you propose must follow these requirements:
-<criteria>(defined per facet)</criteria>
-Before providing your final answer, use the <scratchpad> tags to think
-through your process, explaining your reasoning for grouping and
-selecting representative names. Spend no more than a few paragraphs in
-your scratchpad.
+<criteria>{facet.summaryCriteria}</criteria>
+
+Before providing your final answer, use the <scratchpad> tags to think through your process, explaining your reasoning for grouping and selecting representative names.
+Spend no more than a few paragraphs in your scratchpad.
 Present your final answer in the following format:
 <answer>
 1. [First cluster name]
@@ -211,13 +194,18 @@ Present your final answer in the following format:
 ...
 N. [Nth cluster name]
 </answer>
-Remember, your goal is to create approximately {desired_names} relatively
-distinct cluster names that best represent the original list. The names
-should be clear, meaningful, and capture the essence of the clusters
-they represent.
-Assistant: I understand. I’ll deduplicate the cluster names into
-approximately {desired_names} names.
-<scratchpad>"""
+Remember, your goal is to create approximately {desiredNames} relatively distinct cluster names that best represent the original list.
+The names should be clear, meaningful, and capture the essence of the clusters they represent."""
+        },
+        {
+            "role": "assistant",
+            "content": f"I understand. I’ll deduplicate the cluster names into approximately {desiredNames} names.\n<scratchpad>"
+        }
+    ]
+    # continue_final_message ensures that we are continuing the final assistant message
+    inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
+    prompt = tokenizer.decode(inputs['input_ids'][0])
+    return prompt
 
 # Assigning to higher-level clusters G.7.1
 assigningToHigherLevelClustersPrompt = """You are tasked with categorizing a specific cluster into one of the provided
