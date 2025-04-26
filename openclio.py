@@ -8,6 +8,7 @@ from typing import Any, Union, Tuple, Optional
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import cdist
 from collections import defaultdict
 import re
@@ -141,7 +142,7 @@ def runClio(facets,
         embeddingModel=embeddingModel,
         batchSize=embedBatchSize) if conversationsEmbedings is None else conversationsEmbedings
     print("Getting base clusters")
-   
+    
     kMeans, baseClusters = getBaseClusters(
         facets=facets,
         llm=llm,
@@ -170,6 +171,19 @@ def runClio(facets,
     )
 
     return conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories
+
+
+def getClosestNames(names, embeddingModel):
+    embedded = embeddingModel.encode(names)
+    sims = cosine_similarity(embedded)
+    # middle is 0, make it not
+    np.fill_diagonal(sims, -1)
+    i, j = np.unravel_index(np.argmax(sims), sims.shape)
+    print(sims[i,j])
+    print(names[i])
+    print(names[j])
+
+
 
 def getNeighborhoods(facets, valuesPerFacet, valueMap, embeddingModel, embedBatchSize, kFunc, nClustersOutside, seed):
     
@@ -334,13 +348,20 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
     
     def processOutputFunc(facetI, clusterPrompts, clusterNamesOutputs):
         facet = facets[facetI]
-        higherCategories = set()
+        higherCategoriesDedup = set()
         if shouldMakeFacetClusters(facet): 
             kmeans = kMeansNeighborhoods[facetI]
-            for clusterOutputs in clusterNamesOutputs:
+            for clusterIndex, clusterOutputs in enumerate(clusterNamesOutputs):
+                higherCategoryIndicesInNeighborhoods = facetNeighborhoods[facetI][clusterIndex]
+                higherCategoriesInNeighborhood = [higherCategories[facetI][i] for i in higherCategoryIndicesInNeighborhoods]
                 for output in clusterOutputs:
-                    higherCategories |= set(extractAnswerNumberedList(output))
-        return sorted(list(higherCategories))
+                    deduped = extractAnswerNumberedList(output)
+                    print("\n\n\nNeighborhood:")
+                    print("\n".join(higherCategoriesInNeighborhood))
+                    print("\nDeduped:")
+                    print("\n".join(deduped))
+                    higherCategoriesDedup |= set(deduped)
+        return sorted(list(higherCategoriesDedup))
 
     dedupedCategories = runBatched(list(range(len(facets))),
             getInputs=getInputsFunc,
