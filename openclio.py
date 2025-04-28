@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from utils import flatten, unflatten, runBatched
 import vllm
 import pandas as pd
-from typing import Any, Union, Tuple, Optional, Callable, Dict
+from typing import Any, Union, Tuple, Optional, Callable, Dict, List
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn.cluster import KMeans
@@ -72,11 +72,34 @@ facetExtraInfos = {
     
 }
 
-def conversationToString(conversation):
-    return "\n".join([f"{turn['role']}:\n{turn['content']}" for turn in conversation])
 
 
 # Todo: When getting name and description, instead of counting frequency, choose element that has smallest embedded distance from the average choice
+
+
+@dataclass
+class FacetValue:
+    facet: Facet
+    value: str
+
+@dataclass
+class ConversationFacetData:
+    conversation: list[Any]
+    facetValues: list[FacetValue]
+
+@dataclass
+class ConversationEmbedding:
+    conversation: list[Any]
+    embedding: Any
+    
+@dataclass
+class ConversationCluster:
+    facet: Facet
+    summary: str
+    name: str
+    children: Optional[list[ConversationCluster]] = None
+    parent: Optional[ConversationCluster] = None
+    indices: Optional[np.ndarray[np.int32]] = None
 
 @dataclass
 class OpenClioConfig:
@@ -108,31 +131,6 @@ class OpenClioConfig:
 
 
 
-@dataclass
-class FacetValue:
-    facet: Facet
-    value: str
-
-@dataclass
-class ConversationFacetData:
-    conversation: list[Any]
-    facetValues: list[FacetValue]
-
-@dataclass
-class ConversationEmbedding:
-    conversation: list[Any]
-    embedding: Any
-    
-@dataclass
-class ConversationCluster:
-    facet: Facet
-    summary: str
-    name: str
-    children: Optional[list[ConversationCluster]] = None
-    parent: Optional[ConversationCluster] = None
-    indices: Optional[np.ndarray[np.int32]] = None
-
-
 def getModels():
     model_str = "Qwen/Qwen2.5-7B-Instruct"
     llm = vllm.LLM(model=model_str)
@@ -148,11 +146,11 @@ def getData():
 # conversationsFacetsSmol, conversationsEmbedingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbedings=conversationsEmbedingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
 # conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
 # conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacets, conversationsEmbedings=conversationsEmbedings, kMeans=kMeans, baseClusters=baseClusters)
-def runClio(facets, 
-            llm,
-            embeddingModel,
-            conversations,
-            cfg,
+def runClio(facets : List[Facet], 
+            llm : vllm.LLM,
+            embeddingModel : SentenceTransformer,
+            conversations : List[str],
+            cfg : OpenClioConfig,
             conversationsFacets=None,
             conversationsEmbedings=None,
             kMeans=None,
@@ -202,8 +200,14 @@ def runClio(facets,
 
     return conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents
 
-
-def getClosestNames(names, embeddingModel):
+'''
+Get the pair of names that have closest embeddings when using embeddingModel
+Returns (pairI, pairJ, pairCosineSimilarity)
+'''
+def getClosestNames(
+    names : List[str],
+    embeddingModel: SentenceTransformer
+    ) -> Tuple[int, int, int]:
     embedded = embeddingModel.encode(names)
     sims = cosine_similarity(embedded)
     # middle is 0, make it not
@@ -212,9 +216,11 @@ def getClosestNames(names, embeddingModel):
     print(sims[i,j])
     print(names[i])
     print(names[j])
+    return i,j, sims[i,j]
 
-
-def printHierarchyHelper(parents, indent):
+def printHierarchyHelper(
+    parents : List[ConversationCluster],
+    indent: str) -> List[str]:
     lines = []
     for parent in parents:
         lines.append(indent + parent.name)
@@ -222,31 +228,37 @@ def printHierarchyHelper(parents, indent):
             lines += printHierarchyHelper(parent.children, indent + "  ")
     return lines
 
-def printHierarchy(parents):
+def printHierarchy(parents : List[ConversationCluster]):
     resLines = printHierarchyHelper(list(parents.values()), indent="")
     print("\n".join(resLines))
 
     
-
-def getNeighborhoods(facet, facetValues, valueMap, embeddingModel, embedBatchSize, kFunc, nClustersOutside, seed):
+'''
+Embed map(valueMap, facetValues) into 
+cfg.nAverageClustersPerNeighborhood(len(facetStrValues)) clusters
+using kmeans,
+then add cfg.nSamplesOutsideNeighborhood extra closest samples to each cluster
+return (kmeans, [[neighborhood0...], [neighborhood1...]])
+'''
+def getNeighborhoods(
+    facetStrValues: List[Any],
+    embeddingModel: SentenceTransformer,
+    cfg: OpenClioConfig) -> Tuple[KMeans, List[List[int]]]:
     
     def processBatchFunc(batchOfTextInputs):
         embedded = embeddingModel.encode(batchOfTextInputs)
         return [embedded[i] for i in range(len(batchOfTextInputs))]
     
-    level = 0
-    print(f"Embedding higher level cluster on level {level}")
-    facetClusterEmbeddings = np.stack(runBatched(facetValues,
-                                   getInputs=lambda facetValue: valueMap(facetValue),
+    facetClusterEmbeddings = np.stack(runBatched(facetStrValues,
+                                   getInputs=lambda facetStrValue: facetStrValue,
                                    processBatch=processBatchFunc,
                                    processOutput=lambda facetValue, facetValuePrompt, outputEmbeddings: outputEmbeddings,
                                    batchSize=embedBatchSize))
-    
     facetNeighborhoods = []
-    print(f"Finding neighbors for facet {facet.name}")
-    numClusters = facetClusterEmbeddings.shape[0]
-    k = kFunc(numClusters)
-    kmeans = KMeans(n_clusters=k, random_state=seed)
+    numValues = len(facetStrValues)
+    # in the paper this is numClusters // 40
+    k = cfg.nAverageClustersPerNeighborhood(numValues)
+    kmeans = KMeans(n_clusters=k, random_state=cfg.seed)
     kmeans.fit(preprocessing.normalize(facetClusterEmbeddings))
     distances = cdist(facetClusterEmbeddings, kmeans.cluster_centers_)
     for clusterIndex in range(len(kmeans.cluster_centers_)):
@@ -258,12 +270,16 @@ def getNeighborhoods(facet, facetValues, valueMap, embeddingModel, embedBatchSiz
         # From G.7:
         # "Including the nearest clusters beyond the neighborhood ensures that clusters (or groups of clusters)
         #  on the boundary between neighborhoods are neither overcounted nor undercounted"
-        clusterIndicesInNeighborhood = list(clusterPointsIndices) + list(closestPointsOutsideClusterIndices[:nClustersOutside])
+        clusterIndicesInNeighborhood = list(clusterPointsIndices) + list(closestPointsOutsideClusterIndices[:cfg.nSamplesOutsideNeighborhood])
         facetNeighborhoods.append(clusterIndicesInNeighborhood)
 
     return kmeans, facetNeighborhoods
 
-def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClustersOutside, nCategorizeSamples, desiredNames, embedBatchSize, llmBatchSize, seed, **kwargs):
+def getHierarchy(
+    facets : List[Facet],
+    llm : vllm.LLM,
+    embeddingModel : SentenceTransformer,
+    baseClusters : List[Optional[List[]]]):
     def processBatchFuncLLM(prompts):
         nonlocal seed
         seed += 1
@@ -435,7 +451,11 @@ def getHierarchy(facets, llm, tokenizer, embeddingModel, baseClusters, nClusters
 
 
 
-def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, numberOfBaseClusters, seed, maxPointsToSampleInCluster, maxPointsToSampleOutsideCluster, nLLMSamplesPerCluster, batchSize, **kwargs):
+def getBaseClusters(
+    facets : List[Facet],
+    llm : vllm.LLM,
+    conversationsFacets,
+    conversationsEmbedings):
     tokenizer = llm.get_tokenizer()
     kMeansFacets = []
     def getInputsFunc(facetAndEmbeddings):
@@ -508,7 +528,11 @@ def getBaseClusters(facets, llm, conversationsFacets, conversationsEmbedings, nu
 def shouldMakeFacetClusters(facet):
     return facet.summaryCriteria is not None
 
-def getEmbeddings(facets, conversationsFacets, embeddingModel, batchSize):
+def getEmbeddings(
+        facets: List[Facet],
+        conversationsFacets,
+        embeddingModel,
+        cfg: ):
     def getInputsFunc(facetI):
         facetInputs = []
         facet = facets[facetI]
@@ -533,10 +557,14 @@ def getEmbeddings(facets, conversationsFacets, embeddingModel, batchSize):
                     getInputs=getInputsFunc,
                     processBatch=processBatchFunc,
                     processOutput=processOutputFunc,
-                    batchSize=batchSize)
+                    batchSize=cfg.embedBatchSize)
 
-
-def getMostCommonSummaryAndName(outputs):
+'''
+Gets most common thing in <summary> tag and <name> tag,
+returns (summary, name)
+Todo: instead of counting (most will be unique),
+'''
+def getMostCommonSummaryAndName(outputs: List[str]) -> Tuple[str, str]:
     summaryCounts = defaultdict(lambda: 0)
     nameCounts = defaultdict(lambda: 0)
     for output in outputs:
@@ -555,21 +583,26 @@ def getMostCommonSummaryAndName(outputs):
     name = largestCountItem(nameCounts, "name")
     return summary, name
 
-def removePunctuation(output):
+'''
+Removes ., ?, and ! from end of a string.
+(and strips it before and afterwards)
+'''
+def removePunctuation(output : str) -> str:
     output = output.strip()
     if output.endswith("."):
-        output = output[:-1]
+        output = output[:-1].strip()
     if output.endswith("?"):
-        output = output[:-1]
+        output = output[:-1].strip()
     if output.endswith("!"):
-        output = output[:-1]
+        output = output[:-1].strip()
     return output
 
 '''
 Gets value contained in <tag>VALUE_HERE</tag>
-returns foundTag, valueInTag
+returns (foundTag, valueInTag)
+where foundTag is True if the tag was found
 '''
-def extractTagValue(output, tag):
+def extractTagValue(output: str, tag: str) -> Tuple[bool, str]:
     posOfTag = output.lower().find(f"<{tag}>")
     if posOfTag != -1:
         output = output[posOfTag + len(f"<{tag}>"):].strip()
@@ -580,20 +613,69 @@ def extractTagValue(output, tag):
         return False, output
     return False, output
 
-def extractAnswerNumberedList(output):
+'''
+If we have
+<answer>
+1. blah
+2. blahhh
+3. wow
+etc.
+</answer>
+This will return 
+["blah", "blahhh", "wow", ...]
+'''
+def extractAnswerNumberedList(output : str) : List[str]:
     results = []
     foundAnswerTag, answer = extractTagValue(output, "answer")
     if foundAnswerTag:
         results += [removeNumberFromOutput(line) for line in answer.split("\n") if len(line.strip()) >= 0]
     return results
 
-def removeNumberFromOutput(output):
+'''
+Removes number. from the front of the output
+Like 
+"1. hi"
+becomes
+"hi"
+or
+"144. wow"
+becomes
+"wow"
+'''
+def removeNumberFromOutput(output : str) : str:
     return re.sub(r"^\d*?\.", "", output.strip(), count=1).strip()
 
-def cleanOutput(output):
+'''
+Removes any trailing </tag> that may existing in the output
+Also strips it before and afterwards
+'''
+def cleanTrailingTagsInOutput(output : str) : str:
     return re.findall(r"(.*?)(?:(?:</)|$)", output.strip(), re.DOTALL)[0].strip()
 
-def getFacets(facets, llm, conversations):
+
+'''
+Converts a conversation like
+[
+    {"role": "user", "content": "Hi there"},
+    {"role": "assistant", "content": "Hi :3"}
+]
+into a corresponding string
+User:
+Hi there
+Assistant:
+Hi :3
+'''
+def conversationToString(conversation : List[Dict[str, str]]) -> str:
+    return "\n".join([f"{turn['role']}:\n{turn['content']}" for turn in conversation])
+
+'''
+Gets values for every conversation for each of the facets provided,
+Using the provided llm.
+'''
+def getFacets(
+    facets : List[Facet],
+    llm : vllm.LLM,
+    conversations: List[Dict[str, str]]) -> List[ConversationFacetData]:
     def getInputsFunc(conversation):
         conversationStr = conversationToString(conversation)
         # runBatched will automatically flatten these into us for nice batched usage,
