@@ -11,6 +11,8 @@ from numpy import typing as npt
 from sklearn.cluster import KMeans
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import cosine_similarity
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
 from collections import defaultdict
 import torch
@@ -18,6 +20,7 @@ import os
 import re
 import random
 import cloudpickle
+from pathlib import Path
 
 EmbeddingArray: TypeAlias = npt.NDArray[np.float32]
 
@@ -132,7 +135,7 @@ class OpenClioConfig:
     nDesiredHigherLevelNamesPerClusterFunc: Callable[[int], int] = lambda n: max(1, n//2) # Given number of elements in our neighborhood, return how many higher level cluster names we should have. The default of lambda n: max(1, n//2) will result in there being rougly half the amount of cluster names at each level in the hierarchy.
     # dedup (none)
     # assign lower level to higher level categories 
-    nCategorizeSamples: int = 5 # How many times to resample assignments of cluster to higher level categories. The most common sample is chosen. More samples will take longer but help decrease noise from ordering of members of this category
+    nCategorizeSamples: int = 1 # How many times to resample assignments of cluster to higher level categories. The most common sample is chosen. More samples will take longer but help decrease noise from ordering of members of this category
     # rename once we see what's in the categories
     maxChildrenForRenaming: int = 10 # Maximum number of children in category to display when deciding what to name it, more will make longer prompt but give more accurate classification
     nRenameSamples: int = 5 # How many times to resample the new name and description that we sample, once the children are assigned to a cluster. More samples will take longer but help decrease noise from ordering of children
@@ -153,10 +156,97 @@ def getData():
     d = pd.read_parquet("train-00000-of-00006.parquet", engine="pyarrow")
     return [d.iloc[i].conversation for i in range(len(d))]
 
+def getTotalConversations(item : ConversationCluster):
+    if item.children is None or len(item.children) == 0:
+        return len(item.indices) if item.indices is not None else 0
+    else:
+        return sum([getTotalConversations(child) for child in item.children])
+
+# 0 is root/highest level
+def getAllClustersAtLevel(output : OpenClioResults, level: int):
+    def getAllClustersAtLevelHelper(currentLevelItems : List[ConversationCluster], targetLevel: int):
+        if targetLevel <= 0:
+            return currentLevelItems
+        else:
+            lowerLevelItems = flatten([item.children for item in currentLevelItems if item.children is not None])
+            return getAllClustersAtLevelHelper(lowerLevelItems, targetLevel-1)
+    return getAllClustersAtLevelHelper(output.rootClusters, targetLevel=level)
+
+# we are guaranteed every cluster except base level is non empty so we can just dfs
+def getNumLevels(output: OpenClioResults):
+    def getDepthHelper(currentItem):
+        if currentItem.children is None:
+            return 1
+        else:
+            return getDepthHelper(currentItem.children[0])+1
+    return getDepthHelper(output.rootClusters[0])
+
+def getMaxConversationsPerTermAtLevels(output : OpenClioResults):
+    maxConversationsPerTerm = []
+    for level in range(getNumLevels(output)):
+        levelClusters = getAllClustersAtLevel(level)
+        maxConversations = max([getTotalConversations(cluster) for cluster in levelClusters])
+        maxConversationsPerTerm.append(maxConversations)
+    return maxConversationsPerTerm
+
+def encodeLevels(output: OpenClioResults, lowerLevelInclusive: int, higherLevelInclusive: int, fileMap: Dict[Tuple[str, str], str]):
+    pass
+
+def findTopmostLevelThatKeepsSizeLessThanMaxSize(output: OpenClioResults, curLevel: int, maxSizePerFile: int):
+    dummyFileMap = defaultdict(lambda: "aaaaaaaaaaaaaaaaaa"*10) # dummy file path
+    if curLevel == 0: # we are already at top level, just use that
+        return 0
+    # go curLevel-1, curLevel-2, ..., 0
+    for lowerLevel in range(max(0, curLevel-1), -1, -1):
+        for jsonData in encodeLevels(lowerLevel, curLevel):
+            if len(jsonData) > maxSizePerFile:
+                # we went too far, use previous one
+                return min(curLevel, lowerLevel+1)
+    # we can encode everything, use 0
+    return 0
+
+def convertOutputToJsonChunks(output : OpenClioResults, targetDir : str, maxSizePerFile: int):
+    # get the level closest to root (the top) that has less than or equal to maxConversationsPerFile per term
+    '''
+    numLevels = getNumLevels(output)
+    curLevel = numLevels-1
+    higherLevel = findTopmostLevelThatKeepsSizeLessThanMaxSize(output=output)
+    for higherLevel in range(max(0, curLevel-1), -1, -1):
+        maxDataLen = 0
+        for jsonData in encodeLevels(higherLevel, curLevel):
+            maxDataLen = max(jsonData, maxDataLen)
+        if maxDataLen > maxSizePerFile
+    
+
+    maxConversationLen = max([json.dumps(d) for d in output.conversations])
+    chosenLevelOfEachFile = 0
+    for level, maxConversationsPerTerm in maxConversationsPerTermAtLevels(output):
+        if maxConversationsPerTerm <= maxConversationsPerFile
+            chosenLevelOfEachFile = level
+
+    for i, cluster in enumerate(getAllClustersAtLevel(output, chosenLevelOfEachFile)):
+        writeClusterToJson(cluster, i, targetDir)
+    
+    fileLookup = {}
+    
+    def writeClusterToJson(cluster, i, chosenLevelDir):
+        clusterJsonFile = 
+        fileLookup[(cluster.name, cluster.summary)]
+
+    chosenLevelDir = Path(targetDir).joinpath(f"level{chosenLevelOfEachFile}")
+    chosenLevelDir.mkdir(parents=True, exist_ok=True)
+    for i, cluster in enumerate(getAllClustersAtLevel(output, chosenLevelOfEachFile)):
+        writeClusterToJson(cluster, i, chosenLevelDir)
+
+    # If we didn't store root clusters, we need to store them now
+    if chosenLevelOfEachFile > 0:
 
 
-def convertOutputToJsonChunks(output, targetDir):
-    pass    
+
+    print(f"One file for each item with depth {chosenLevelOfEachFile}")
+    '''
+
+    
 
 
 
@@ -167,6 +257,7 @@ class OpenClioResults:
     baseKMeans: List[KMeans]
     baseClusters: List[Optional[List[ConversationCluster]]]
     rootClusters: List[Optional[List[ConversationCluster]]]
+    conversations: List[List[Dict[str, str]]]
 
 # conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
 # conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbeddings=conversationsEmbeddingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
@@ -175,7 +266,7 @@ class OpenClioResults:
 def runClio(facets : List[Facet], 
             llm : vllm.LLM,
             embeddingModel : SentenceTransformer,
-            conversations : List[str],
+            conversations : List[List[Dict[str, str]]],
             cfg : OpenClioConfig = None,
             conversationsFacets: List[ConversationFacetData] = None,
             conversationsEmbeddings: List[Optional[EmbeddingArray]] = None,
@@ -229,7 +320,8 @@ def runClio(facets : List[Facet],
         conversationsEmbeddings=conversationsEmbeddings,
         baseKMeans=baseKMeans,
         baseClusters=baseClusters,
-        rootClusters=rootClusters
+        rootClusters=rootClusters,
+        conversations=conversations
     )
 
 '''
@@ -342,7 +434,7 @@ def getHierarchy(
             topLevelParents.append(None)
             continue
 
-        curLevelFacetClusters : List[ConversationCluster] = baseClusters[facetI]
+        curLevelFacetClusters : List[ConversationCluster] = baseClusters[facetI][:2000]
         level = 0
         while len(curLevelFacetClusters) > cfg.minTopLevelSize:
 
@@ -413,10 +505,19 @@ def getHierarchy(
                     higherCategoryDedupOutput : str) -> List[Tuple[str, Sources]]:
                 # get sources in terms of original categories (union over all the different higher category inputs to this dedup)
                 allSources = set()
-                for (higherCategory, higherCategorySources) in [higherCategories[i] for i in higherCategoryIndicesInNeighborhoods]:
+                higherCategoriesInNeighborhood = [higherCategories[i] for i in higherCategoryIndicesInNeighborhoods]
+                for (higherCategory, higherCategorySources) in higherCategoriesInNeighborhood:
                     allSources |= set(higherCategorySources)
                 allSources = sorted(list(allSources))
-                return [(removePunctuation(output).strip(), allSources) for output in extractAnswerNumberedList(higherCategoryDedupOutput)]
+                extractedOptions = extractAnswerNumberedList(higherCategoryDedupOutput)
+                # fall back to dedup based on embedding
+                if len(extractedOptions) == 0:
+                    print(higherCategoryDedupOutput)
+                    print("no dedup extracted, falling back to dedup based on embedding (usually this means model got stuck in a loop)")
+                    extractedOptions = deduplicateByEmbeddings([cat for (cat, sources) in higherCategoriesInNeighborhood], embeddingModel=embeddingModel, tau=0.1)
+                return [(removePunctuation(output).strip(), allSources) for output in extractedOptions]
+
+
             
             # todo: size 1 or 2 clusters, just ignore them (size 2 maybe set desired to 2? unless very high overlap in embed? idk)
             dedupedCategories = dedupAndMergeSources(
@@ -437,6 +538,9 @@ def getHierarchy(
             for category, sources in dedupedCategories:
                 for sourceI in sources:
                     baseClusterPotentialHigherLevelClusters[sourceI].append(category)
+            for i, c in enumerate(baseClusterPotentialHigherLevelClusters):
+                if len(c) == 0:
+                    print(curLevelFacetClusters[i])
             
             def getInputsFunc(facetClusterData : Tuple[ConversationCluster, List[str]]) -> List[str]:
                 facetCluster, potentialHigherLevelClusters = facetClusterData
@@ -473,6 +577,19 @@ def getHierarchy(
                 # once we have that, bestAssignedCluster is the entry that has smallest distance to bestHigherLevelClusterAssignedTo
                 # This approach helps us avoid the model slightly renaming things and helps us pick the most representative pair
                 # I invented this idk what they do but this seems the obvious thing to do imo so they probably do this and just didn't say
+                if len(assignedClusters) == 0:
+                    print("Could not find higher level clusters due to size being zero")
+                    print("Potential higher level clusters:")
+                    for c in potentialHigherLevelClusters:
+                        print(" "  + c)
+                    print("Assigned clusters:")
+                    for c in assignedClusters:
+                        print(" " + assignedClusters)
+                    print("Outputs:")
+                    for output in assignToHigherCategoryOutput:
+                        print(output)
+                    # failed to extract cluster from llm, fall back to embedding of the cluster
+                    assignedClusters.append(facetCluster.summary + "\n" + facetCluster.name)
                 bestAssignedCluster, bestHigherLevelClusterAssignedTo = bestRepresentativePair(assignedClusters, potentialHigherLevelClusters, embeddingModel)
                 parent = parents[bestHigherLevelClusterAssignedTo.lower().strip()]
                 if parent.children is None:
@@ -742,6 +859,64 @@ def getFacets(
 ##### Various utility parsing stuff #####
 
 
+def connectedComponentsFromMask(mask: np.ndarray) -> List[np.ndarray]:
+    """
+    mask : dense *boolean* adjacency matrix (n × n, symmetric, no self-loops)
+    returns : list of 1-D index arrays – one per connected component
+    """
+    graph = csr_matrix(mask, dtype=bool)
+    n_components, labels = connected_components(graph, directed=False)
+    return [np.flatnonzero(labels == k) for k in range(n_components)]
+
+
+def medoidFromEmbeddings(indices: np.ndarray,
+                            embs: np.ndarray) -> int:
+    """
+    embs : unit-norm embeddings (n × d)
+    indices : indices of the points that form one component
+    returns : index (WITHIN indices) of the true medoid under cosine distance
+    """
+    sub = embs[indices]                       # |C| × d
+    sim = cosine_similarity(sub)              # |C| × |C|
+    distSums = (1.0 - sim).sum(axis=1)
+    return indices[int(np.argmin(distSums))] # global index
+
+
+def deduplicateByEmbeddings(
+        values: List[str],
+        embeddingModel: SentenceTransformer,
+        tau: float = 0.15          # distance threshold (0.15 ≈ cosine ≥ 0.85)
+) -> List[str]:
+    """
+    Single-link deduplication.  Returns one representative per duplicate set,
+    chosen as the exact medoid of each connected component.
+    """
+    if len(values) == 0:
+        return []
+
+    # 1. Embed once, L2-normalise so cosine == dot product
+    emb = preprocessing.normalize(embeddingModel.encode(values))
+
+    # 2. Dense distance matrix  (O(n²) memory!)
+    sim = cosine_similarity(emb)
+    dist = 1.0 - sim
+
+    # 3. Boolean adjacency under threshold (no self-loops)
+    mask = (dist <= tau) & ~np.eye(len(values), dtype=bool)
+
+    # 4. Connected components (single-link duplicate sets)
+    components = connectedComponentsFromMask(mask)
+
+    # 5. Medoid for every component
+    representatives = []
+    for comp in components:
+        if comp.size == 1:
+            representatives.append(values[comp[0]])
+        else:
+            medoid_idx = medoidFromEmbeddings(comp, emb)
+            representatives.append(values[medoid_idx])
+
+    return representatives
 
 # from https://gist.github.com/gatheluck/c57e2a40e3122028ceaecc3cb0d152ac
 def setSeed(seed):
@@ -763,7 +938,7 @@ def bestRepresentativePair(
       • b_star  minimises Σ_{a∈A} (1 - cos(a, b))
       • a_star  is the element of A closest to that b_star
     """
-    if not A or not B:
+    if len(A) == 0 or len(B) == 0:
         raise ValueError("A and B must be non-empty")
 
     # 1 . Encode & L2-normalise so cosine == dot product

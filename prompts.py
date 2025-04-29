@@ -315,7 +315,7 @@ Based on this information, determine the most appropriate higher-level cluster a
         ],
         replacementsDict = {
             "clusterToAssignName": clusterToAssign.name,
-            "clusterToAssignSummary", clusterToAssign.summary,
+            "clusterToAssignSummary": clusterToAssign.summary,
             "clustersStr": clustersStr,
         }
     )
@@ -366,7 +366,7 @@ Here is the summary, which I will follow with the name:
             }
         ],
         replacementsDict = {
-            "summaryCriteria": facet.summaryCriteria
+            "summaryCriteria": facet.summaryCriteria,
             "clusterStr": clusterStr
         }
     )
