@@ -133,6 +133,7 @@ class OpenClioConfig:
     # assign lower level to higher level categories 
     nCategorizeSamples: int = 5 # How many times to resample assignments of cluster to higher level categories. The most common sample is chosen. More samples will take longer but help decrease noise from ordering of members of this category
     # rename once we see what's in the categories
+    maxChildrenForRenaming: int = 10 # Maximum number of children in category to display when deciding what to name it, more will make longer prompt but give more accurate classification
     nRenameSamples: int = 5 # How many times to resample the new name and description that we sample, once the children are assigned to a cluster. More samples will take longer but help decrease noise from ordering of children
 
     llmExtraInferenceArgs: Dict[str, Any] = field(default_factory=lambda: {
@@ -204,7 +205,6 @@ def runClio(facets : List[Facet],
         conversationsEmbedings=conversationsEmbedings,
         cfg=cfg) if baseKMeans is None or baseClusters is None else (baseKMeans, baseClusters)
     
-    return baseClusters
     print("Getting higher level clusters")
     rootClusters : List[Optional[List[ConversationCluster]]] = getHierarchy(
         facets=facets,
@@ -262,7 +262,7 @@ then add cfg.nSamplesOutsideNeighborhood extra closest samples to each cluster
 return (kmeans, [[neighborhood0...], [neighborhood1...]])
 '''
 def getNeighborhoods(
-    facetStrValues: List[Any],
+    facetStrValues: List[str],
     embeddingModel: SentenceTransformer,
     cfg: OpenClioConfig) -> Tuple[KMeans, List[List[int]]]:
     
@@ -343,8 +343,8 @@ def getHierarchy(
             print(f"facet {facet} level {level}")
 
             print("getting category neighborhoods")
-            kmeans, facetNeighborhoods = getNeighborhoods(facet,
-                        facetStrValues=map(lambda cluster: f"{cluster.name}\n{cluster.summary}", curLevelFacetClusters),
+            kmeans, facetNeighborhoods = getNeighborhoods(
+                        facetStrValues=list(map(lambda cluster: f"{cluster.name}\n{cluster.summary}", curLevelFacetClusters)),
                         embeddingModel=embeddingModel,
                         cfg=cfg)
 
@@ -355,7 +355,7 @@ def getHierarchy(
                 clustersInNeighborhood = [curLevelFacetClusters[i] for i in clusterIndicesInNeighborhood]
                 # shuffle ordering
                 random.shuffle(clustersInNeighborhood)
-                return getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)))
+                return getNeighborhoodClusterNamesPrompt(facet, llm.get_tokenizer(), clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)))
             
             def processOutputFunc(clusterIndicesInNeighborhood : Sources, clusterPrompt : str, clusterNamesOutput : str) -> List[Tuple[str, Sources]]:
                 # also store where it came from
@@ -382,7 +382,7 @@ def getHierarchy(
             #### Dedup higher categories ####
             
             print("getting higher level category neighborhoods")
-            kmeans, facetNeighborhoods = getNeighborhoods(facet,
+            kmeans, facetNeighborhoods = getNeighborhoods(
                         facetStrValues=[name for (name, sources) in higherCategories],
                         embeddingModel=embeddingModel,
                         cfg=cfg)
@@ -394,7 +394,7 @@ def getHierarchy(
                 targetAmount =  max(1, len(higherCategoriesInNeighborhood)-1) # aim for -1 (arbitrary), but prompt lets it do more or less as needed
                 if len(higherCategoriesInNeighborhood) == 2:
                     targetAmount = 2 # for only two, it'll mangle the categories if we ask it to dedup them into one, so don't do that
-                return getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, targetAmount)
+                return getDeduplicateClusterNamesPrompt(facet, llm.get_tokenizer(), higherCategoriesInNeighborhood, targetAmount)
             
             def processOutputFunc(
                     higherCategoryIndicesInNeighborhoods : List[Tuple[str, Sources]],
@@ -470,12 +470,12 @@ def getHierarchy(
                 getInputs=getInputsFunc,
                 processBatch=processBatchFuncLLM,
                 processOutput=processOutputFunc,
-                batchSize=llmBatchSize)
+                batchSize=cfg.llmBatchSize)
 
             # remove any parents that didn't have any children assigned
             for parentKey, parentValue in list(parents.items()):
                 if parentValue.children is None or len(parentValue.children) == 0:
-                    del parents[parent]
+                    del parents[parentKey]
 
             #### Rename categories based on which children they were given ####
 
@@ -483,7 +483,7 @@ def getHierarchy(
             def getInputsFunc(parent : ConversationCluster) -> List[str]:
                 renamingPrompts = []
                 for _ in range(cfg.nRenameSamples):
-                    random.shuffle(parent.children[:maxNChildrenForRenaming])
+                    random.shuffle(parent.children[:cfg.maxChildrenForRenaming])
                     renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, llm.get_tokenizer(), parent.children))
                 return renamingPrompts
             
@@ -496,7 +496,7 @@ def getHierarchy(
                 getInputs=getInputsFunc,
                 processBatch=processBatchFuncLLM,
                 processOutput=processOutputFunc,
-                batchSize=llmBatchSize)
+                batchSize=cfg.llmBatchSize)
 
             # Now those parents are our current level, go up higher
             curLevelFacetClusters = parents
