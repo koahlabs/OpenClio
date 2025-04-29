@@ -17,6 +17,7 @@ import torch
 import os
 import re
 import random
+import cloudpickle
 
 EmbeddingArray: TypeAlias = npt.NDArray[np.float32]
 
@@ -197,6 +198,8 @@ def runClio(facets : List[Facet],
         embeddingModel=embeddingModel,
         cfg=cfg) if conversationsEmbedings is None else conversationsEmbedings
     
+    with open("chonkers/tmpClioResultsTotes1.pkl", "wb") as f:
+        cloudpickle.dump((conversationsFacets, conversationsEmbedings), f)
     print("Getting base clusters")
     baseKMeans, baseClusters = getBaseClusters(
         facets=facets,
@@ -204,6 +207,8 @@ def runClio(facets : List[Facet],
         conversationsFacets=conversationsFacets,
         conversationsEmbedings=conversationsEmbedings,
         cfg=cfg) if baseKMeans is None or baseClusters is None else (baseKMeans, baseClusters)
+    with open("chonkers/tmpClioResultsTotes2.pkl", "wb") as f:
+        cloudpickle.dump((conversationsFacets, conversationsEmbedings, baseKMeans, baseClusters), f)
     
     print("Getting higher level clusters")
     rootClusters : List[Optional[List[ConversationCluster]]] = getHierarchy(
