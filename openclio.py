@@ -198,16 +198,17 @@ def runClio(facets : List[Facet],
         embeddingModel=embeddingModel,
         cfg=cfg) if conversationsEmbedings is None else conversationsEmbedings
     
-    with open("chonkers/tmpClioResultsTotes1.pkl", "wb") as f:
+    with open("chonkers/tmpClioResultsTotesf1.pkl", "wb") as f:
         cloudpickle.dump((conversationsFacets, conversationsEmbedings), f)
     print("Getting base clusters")
     baseKMeans, baseClusters = getBaseClusters(
         facets=facets,
         llm=llm,
+        embeddingModel=embeddingModel,
         conversationsFacets=conversationsFacets,
         conversationsEmbedings=conversationsEmbedings,
         cfg=cfg) if baseKMeans is None or baseClusters is None else (baseKMeans, baseClusters)
-    with open("chonkers/tmpClioResultsTotes2.pkl", "wb") as f:
+    with open("chonkers/tmpClioResultsTotesf2.pkl", "wb") as f:
         cloudpickle.dump((conversationsFacets, conversationsEmbedings, baseKMeans, baseClusters), f)
     
     print("Getting higher level clusters")
@@ -455,6 +456,28 @@ def getHierarchy(
                     assignToHigherCategoryOutput : List[str]
                 ):
                 facetCluster, potentialHigherLevelClusters = facetClusterData
+                assignedClusters = []
+                for output in assignToHigherCategoryOutput:
+                    foundOutput, outputValue = extractTagValue(output, "answer")
+                    # remove cluster and punctuation if it added it
+                    outputValue = removePunctuation(outputValue.replace("<cluster>", "").replace("</cluster>", "").strip()).strip()
+                    if foundOutput:
+                        assignedClusters.append(outputValue)
+                # in the embedding space, find the entry
+                # bestHigherLevelClusterAssignedTo
+                # in potentialHigherLevelClusters that has smallest total distance to all entries of assignedClusters
+                # once we have that, bestAssignedCluster is the entry that has smallest distance to bestHigherLevelClusterAssignedTo
+                # This approach helps us avoid the model slightly renaming things and helps us pick the most representative pair
+                # I invented this idk what they do but this seems the obvious thing to do imo so they probably do this and just didn't say
+                bestAssignedCluster, bestHigherLevelClusterAssignedTo = bestRepresentativePair(assignedClusters, potentialHigherLevelClusters, embeddingModel)
+                parent = parents[bestHigherLevelClusterAssignedTo.lower().strip()]
+                if parent.children is None:
+                    parent.children = []
+                parent.children.append(facetCluster)
+                facetCluster.parent = parent
+                '''
+                # This approach doesn't work because they'll be named slightly different so things won't match and counts won't be right
+                # instead we do things in the embedding space (above)
                 counts = defaultdict(lambda: [])
                 for output in assignToHigherCategoryOutput:
                     foundOutput, outputValue = extractTagValue(output, "answer")
@@ -470,6 +493,7 @@ def getHierarchy(
                     facetCluster.parent = parents[mostCommonKey]
                 else:
                     raise ValueError("(todo: use embedding to lookup) Could not find key: " + mostCommonKey)
+                '''
                 return None
 
             runBatched(list(zip(curLevelFacetClusters, baseClusterPotentialHigherLevelClusters)),
@@ -494,7 +518,7 @@ def getHierarchy(
                 return renamingPrompts
             
             def processOutputFunc(parent : ConversationCluster, renamePrompts : List[str], renamingOutputs : List[str]):
-                summary, name = getMostCommonSummaryAndName(renamingOutputs)
+                summary, name = getMedoidSummaryAndName(renamingOutputs, embeddingModel)
                 parent.summary = summary
                 parent.name = name
         
@@ -523,6 +547,7 @@ there will be cfg.nBaseClusters number of ConversationClusters in that list
 def getBaseClusters(
         facets : List[Facet],
         llm : vllm.LLM,
+        embeddingModel : SentenceTransformer,
         conversationsFacets : List[ConversationFacetData],
         conversationsEmbedings : List[Optional[EmbeddingArray]],
         cfg : OpenClioConfig
@@ -588,7 +613,7 @@ def getBaseClusters(
             kmeans = kMeansFacets[facetI]
             for clusterIndex, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), outputs):
                 clusterPointsIndices = np.arange(len(conversationsFacets))[kmeans.labels_ == clusterIndex]
-                summary, name = getMostCommonSummaryAndName(clusterOutputs)
+                summary, name = getMedoidSummaryAndName(clusterOutputs, embeddingModel)
                 outputClusters.append(
                     ConversationCluster(
                         facet=facet,
@@ -644,6 +669,7 @@ def getEmbeddings(
                     processBatch=processBatchFunc,
                     processOutput=processOutputFunc,
                     batchSize=cfg.embedBatchSize)
+
 
 
 '''
@@ -712,6 +738,7 @@ def getFacets(
 ##### Various utility parsing stuff #####
 
 
+
 # from https://gist.github.com/gatheluck/c57e2a40e3122028ceaecc3cb0d152ac
 def setSeed(seed):
   random.seed(seed)
@@ -721,10 +748,115 @@ def setSeed(seed):
   torch.cuda.manual_seed(seed)
   torch.backends.cudnn.deterministic = True
 
+
+def bestRepresentativePair(
+    A: List[str],
+    B: List[str],
+    model: SentenceTransformer
+) -> Tuple[str, str]:
+    """
+    Return (a_star, b_star) where:
+      • b_star  minimises Σ_{a∈A} (1 - cos(a, b))
+      • a_star  is the element of A closest to that b_star
+    """
+    if not A or not B:
+        raise ValueError("A and B must be non-empty")
+
+    # 1 . Encode & L2-normalise so cosine == dot product
+    AEmb = preprocessing.normalize(model.encode(A, convert_to_numpy=True))
+    BEmb = preprocessing.normalize(model.encode(B, convert_to_numpy=True))
+
+    # 2 . Cosine similarity matrix  (n × m)
+    sim = cosine_similarity(AEmb, BEmb)         # fast, vectorised
+
+    # 3 . For every b_j compute total distance to all a_i
+    distSumsForEachB = (1.0 - sim).sum(axis=0)           # shape (m,)
+
+    closestB = int(np.argmin(distSumsForEachB))
+    bStar = B[closestB]
+
+    # 4 . Find a_i closest to that bStar            
+    distOfEachAToBStar = 1.0 - sim[:, closestB]                 # shape (n,)
+    bestAIndex = int(np.argmin(distOfEachAToBStar))
+    aStar = A[bestAIndex]
+
+    return aStar, bStar
+
+
+def getMedoidViaEmbeddings(
+    values: List[str],
+    embeddingModel: SentenceTransformer
+) -> str:
+    """
+    Return the element of `values` that minimises the sum of
+    cosine distances ( = 1 - cosine similarity ) to all others.
+
+    This is the exact medoid under cosine distance.
+    Complexity:  O(n²) in time,  O(n²) in memory.
+    """
+    if len(values) == 0:
+        raise ValueError("`values` must contain at least one string.")
+
+    # 1. Embed and L2-normalise so that
+    #    cosine(u, v) == u @ v   (dot product after normalisation)
+    embeddings = preprocessing.normalize(
+        embeddingModel.encode(values, convert_to_numpy=True)
+    )                                # shape = (n, d)
+
+    # 2. Pair-wise cosine similarity matrix  (n × n)
+    #    sim[i, j] = cosine( values[i], values[j] )
+    sim = cosine_similarity(embeddings)           # fast & vectorised
+
+    # 3. Convert similarity → distance  and add up per row
+    #    dist = 1 - sim   (because vectors are unit-norm)
+    dist_sums = (1.0 - sim).sum(axis=1)           # shape = (n,)
+
+    # 4. Index of smallest total distance = medoid
+    medoid_idx = int(np.argmin(dist_sums))
+    return values[medoid_idx]
+
+
+
+'''
+Computes the average of the values embeddings,
+then finds the value that is closest to that average
+This is sort of a continuous version of "pick the most common element"
+But actually what we want is the medoid (term that is closest to all the others)
+
+'''
+def getCentroidViaEmbeddings(
+    values : List[str],
+    embeddingModel : SentenceTransformer) -> str:
+    normalizedValues = preprocessing.normalize(embeddingModel.encode(values))
+    avg = normalizedValues.mean(axis=0)
+    sims = cosine_similarity(wow, wow.mean(axis=0).reshape(1, -1)).flatten()
+    return values[np.argmax(sims)]
+
+
+'''
+Continuous version of "get most common"
+That gets the embedded value that is closest to all other items (the medoid)
+returns (summary, name)
+'''
+def getMedoidSummaryAndName(outputs: List[str], embeddingModel : SentenceTransformer) -> Tuple[str, str]:
+    summaries = []
+    names = []
+    for output in outputs:
+        # re.DOTALL makes . match newlines too (by default it does not)
+        matches = re.findall(r"(.*?)</summary>.*?<name>(.*?)</name>", output, re.DOTALL)
+        if len(matches) > 0:
+            for summary, name in matches:
+                summaries.append(removePunctuation(summary.strip()))
+                names.append(removePunctuation(name.strip()))
+    # remove empty strings
+    summaries = [summary for summary in summaries if len(summary) > 0]
+    names = [name for name in names if len(name) > 0]
+    return getMedoidViaEmbeddings(summaries, embeddingModel), getMedoidViaEmbeddings(names, embeddingModel)
+
 '''
 Gets most common thing in <summary> tag and <name> tag,
 returns (summary, name)
-Todo: instead of counting (most will be unique),
+I recommend to use getMedoidSummaryAndName so we act in embedding space instead
 '''
 def getMostCommonSummaryAndName(outputs: List[str]) -> Tuple[str, str]:
     summaryCounts = defaultdict(lambda: 0)
