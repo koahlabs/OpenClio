@@ -229,7 +229,7 @@ Returns (pairI, pairJ, pairCosineSimilarity)
 def getClosestNames(
     names : List[str],
     embeddingModel: SentenceTransformer
-    ) -> Tuple[int, int, int]:
+    ) -> Tuple[int, int, float]:
     embedded = embeddingModel.encode(names)
     sims = cosine_similarity(embedded)
     # middle is 0, make it not
@@ -251,7 +251,7 @@ def printHierarchyHelper(
     return lines
 
 def printHierarchy(parents : List[ConversationCluster]):
-    resLines = printHierarchyHelper(list(parents.values()), indent="")
+    resLines = printHierarchyHelper(parents, indent="")
     print("\n".join(resLines))
 
 '''
@@ -279,7 +279,7 @@ def getNeighborhoods(
     numValues = len(facetStrValues)
     # in the paper this is numClusters // 40
     k = cfg.nAverageClustersPerNeighborhood(numValues)
-    kmeans = KMeans(n_clusters=k, random_state=cfg.seed)
+    kmeans = KMeans(n_clusters=min(numValues, k), random_state=cfg.seed)
     kmeans.fit(preprocessing.normalize(facetClusterEmbeddings))
     distances = cdist(facetClusterEmbeddings, kmeans.cluster_centers_)
     for clusterIndex in range(len(kmeans.cluster_centers_)):
@@ -322,7 +322,7 @@ def getHierarchy(
     def processBatchFuncLLM(prompts : List[str]) -> List[str]:
         nonlocal seed # we increment it so duplicate entries will get distinct things
         seed += 1
-        samplingParams = vllm.SamplingParams(seed=cfg.seed, **cfg.llmExtraInferenceArgs)
+        samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
         modelOutputs = llm.generate(prompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs] 
     
@@ -483,8 +483,8 @@ def getHierarchy(
             def getInputsFunc(parent : ConversationCluster) -> List[str]:
                 renamingPrompts = []
                 for _ in range(cfg.nRenameSamples):
-                    random.shuffle(parent.children[:cfg.maxChildrenForRenaming])
-                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, llm.get_tokenizer(), parent.children))
+                    random.shuffle(parent.children)
+                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, llm.get_tokenizer(), parent.children[:cfg.maxChildrenForRenaming]))
                 return renamingPrompts
             
             def processOutputFunc(parent : ConversationCluster, renamePrompts : List[str], renamingOutputs : List[str]):
@@ -499,7 +499,7 @@ def getHierarchy(
                 batchSize=cfg.llmBatchSize)
 
             # Now those parents are our current level, go up higher
-            curLevelFacetClusters = parents
+            curLevelFacetClusters = list(parents.values())
             level += 1
         topLevelParents.append(curLevelFacetClusters)
     return topLevelParents
@@ -522,17 +522,21 @@ def getBaseClusters(
         cfg : OpenClioConfig
     ) -> Tuple[List[Optional[KMeans]], List[Optional[List[ConversationCluster]]]]:
     tokenizer = llm.get_tokenizer()
-    kMeansFacets = []
+    kMeansFacets = [None] * len(facets)
 
+    seed = cfg.seed
     def getInputsFunc(facetAndEmbeddings : Tuple[int, Tuple[Facet, EmbeddingArray]]) -> List[List[str]]:
+        nonlocal seed
+        seed += 1 # do this so repeated entries get different outputs
         lookupClusterPrompts = []
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
         if shouldMakeFacetClusters(facet):
             print(f"Running kmeans for facet {facet.name}")
-            kmeans = KMeans(n_clusters=cfg.nBaseClustersFunc(facetEmbeddings.shape[0]), random_state=seed)
+            n = facetEmbeddings.shape[0]
+            kmeans = KMeans(n_clusters=min(n, cfg.nBaseClustersFunc(n)), random_state=seed)
             kmeans.fit(preprocessing.normalize(facetEmbeddings))
             distances = cdist(facetEmbeddings, kmeans.cluster_centers_)
-            kMeansFacets.append(kmeans)
+            kMeansFacets[facetI] = kmeans
 
             # For each cluster, find the index of the closest point
             for clusterIndex in range(len(kmeans.cluster_centers_)):
@@ -542,7 +546,7 @@ def getBaseClusters(
                 # Get closest points not in this cluster
                 outsideClusterIndices = np.where(kmeans.labels_ != clusterIndex)[0]
                 closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distances[kmeans.labels_ != clusterIndex, clusterIndex])]
-                sampledOutsideClusterIndices = closestPointsOutsideClusterIndices[:min(cfg.maxPointsToSampleOutsideCluster, clusterPointsIndices.shape[0])]
+                sampledOutsideClusterIndices = closestPointsOutsideClusterIndices[:min(cfg.maxPointsToSampleOutsideCluster, closestPointsOutsideClusterIndices.shape[0])]
 
                 # grab the facet values
                 clusterFacetValues = [conversationsFacets[i].facetValues[facetI].value for i in clusterPointsIndices]
@@ -560,7 +564,6 @@ def getBaseClusters(
             kMeansFacets.append(None)
         return lookupClusterPrompts
     
-    seed = cfg.seed
     def processBatchFunc(batchOfPrompts : List[str]) -> List[str]:
         nonlocal seed
         seed += 1 # do this so repeated entries get different outputs
@@ -573,9 +576,9 @@ def getBaseClusters(
             clusterPrompts: List[List[str]],
             outputs: List[List[str]]
         ) -> List[ConversationCluster]:
-        outputClusters = []
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
         if shouldMakeFacetClusters(facet):
+            outputClusters = []
             kmeans = kMeansFacets[facetI]
             for clusterIndex, clusterOutputs in zip(range(len(kmeans.cluster_centers_)), outputs):
                 clusterPointsIndices = np.arange(len(conversationsFacets))[kmeans.labels_ == clusterIndex]
@@ -588,7 +591,9 @@ def getBaseClusters(
                         indices=clusterPointsIndices,
                     )
                 )
-        return outputClusters
+            return outputClusters
+        else:
+            return None
 
     return kMeansFacets, runBatched(list(enumerate(zip(facets, conversationsEmbedings))),
                getInputs=getInputsFunc,
@@ -776,7 +781,7 @@ def extractAnswerNumberedList(output : str) -> List[str]:
     results = []
     foundAnswerTag, answer = extractTagValue(output, "answer")
     if foundAnswerTag:
-        results += [removeNumberFromOutput(line) for line in answer.split("\n") if len(line.strip()) >= 0]
+        results += [removeNumberFromOutput(line) for line in answer.split("\n") if len(line.strip()) > 0]
     return results
 
 '''
