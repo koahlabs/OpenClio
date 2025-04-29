@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from utils import flatten, unflatten, runBatched
 import vllm
 import pandas as pd
-from typing import Any, Union, Tuple, Optional, Callable, Dict, List
+from typing import Any, Union, Tuple, Optional, Callable, Dict, List, TypeAlias
 from sentence_transformers import SentenceTransformer
 import numpy as np
+from numpy import typing as npt
 from sklearn.cluster import KMeans
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import cosine_similarity
@@ -14,6 +15,8 @@ from scipy.spatial.distance import cdist
 from collections import defaultdict
 import re
 import random
+
+EmbeddingArray: TypeAlias = npt.NDArray[Tuple[int, int], np.float32]
 
 @dataclass
 class FacetExtraInfo:
@@ -111,17 +114,24 @@ class OpenClioConfig:
     
 
     ### Generate Base Clusters params
-    nOfBaseClusters: Optional[int] = None # Number of base clusters to start with. If unspecified, will set to data size / 10
-    maxPointsToSampleInsideCluster : int = 10 # Number of points we sample inside the cluster, when determining base cluster names and summaries. More will make longer contexts but give the llm more information.
-    maxPointsToSampleOutsideCluster : int = 10 # Number of points we sample outside the cluster (as examples of stuff closest to, but *not* in the cluster), when determining base cluster names and summaries. More will make longer contexts but give the llm more information.
-    nNameDescriptionSamplesPerCluster: int = 5 # How many times to sample a cluster's name and description. We sample multiple times and take the most frequent answer, so higher values here help avoid any noise from data ordering (but takes longer).
+    nBaseClusters: Optional[int] = None # Number of base clusters to start with. If unspecified, will set to data size / 10
+    maxPointsToSampleInsideCluster : int = 10 # Number of points we sample inside the cluster, when determining base cluster names and summaries. More will make longer contexts but give the llm more information
+    maxPointsToSampleOutsideCluster : int = 10 # Number of points we sample outside the cluster (as examples of stuff closest to, but *not* in the cluster), when determining base cluster names and summaries. More will make longer contexts but give the llm more information
+    nNameDescriptionSamplesPerCluster: int = 5 # How many times to sample a cluster's name and description. We sample multiple times and take the most frequent answer, so higher values here help avoid any noise from data ordering (but takes longer)
 
     ### Hierarchy params
+    minTopLevelSize: int = 5 # Once we've reached this many or less clusters, we have reached the top, stop going higher
+    # neighborhoods
     nAverageClustersPerNeighborhood: Callable[[int], int] = lambda n: max(1, n//40) # Function that tells us how many number of clusters to have per neighborhood, on average. From G.7, "average number of clusters per neighborhood is 40", so default is lambda n: max(1, n//40)
     nSamplesOutsideNeighborhood: int = 5 # How many samples from outside the k-means cluster to add to each neighborhood. From G.7, "Including the nearest clusters beyond the neighborhood ensures that clusters (or groups of clusters on the boundary between neighborhoods are neither overcounted nor undercounted)." 
-    nCategorizeSamples: int = 5 # How many times to resample assignments of cluster to higher level categories. The most common sample is chosen. More samples will take longer but help decrease noise from orderings.
-
-
+    # get names from neighborhoods
+    nDesiredHigherLevelNamesPerClusterFunc: Callable[[int], int] = lambda n: max(1, n//2) # Given number of elements in our neighborhood, return how many higher level cluster names we should have. The default of lambda n: max(1, n//2) will result in there being rougly half the amount of cluster names at each level in the hierarchy.
+    # dedup
+    # assign lower level to higher level categories 
+    nCategorizeSamples: int = 5 # How many times to resample assignments of cluster to higher level categories. The most common sample is chosen. More samples will take longer but help decrease noise from ordering of members of this category
+    # rename once we see what's in the categories
+    nRenameSamples: int = 5 # How many times to resample the new name and description that we sample, once the children are assigned to a cluster. More samples will take longer but help decrease noise from ordering of children
+    
     ### Resume params
     conversationsFacets: Optional[]
 
@@ -142,6 +152,15 @@ def getData():
     d = pd.read_parquet("train-00000-of-00006.parquet", engine="pyarrow")
     return [d.iloc[i].conversation for i in range(len(d))]
 
+# from https://gist.github.com/gatheluck/c57e2a40e3122028ceaecc3cb0d152ac
+def setSeed(seed):
+  random.seed(seed)
+  os.environ('PYTHONHASHSEED') = str(seed)
+  np.random.seed(seed)
+  torch.manual_seed(seed)
+  torch.cuda.manual_seed(seed)
+  torch.backends.cudnn.deterministic = True
+
 # conversationsFacetsSmol, conversationsEmbedingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
 # conversationsFacetsSmol, conversationsEmbedingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbedings=conversationsEmbedingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
 # conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
@@ -155,8 +174,9 @@ def runClio(facets : List[Facet],
             conversationsEmbedings=None,
             kMeans=None,
             baseClusters=None):
-    np.random.seed(seed)
-    random.seed(seed)
+
+    setSeed(cfg.seed)
+
     print("Getting facets")
     conversationsFacets = getFacets(
         facets=facets, 
@@ -164,38 +184,29 @@ def runClio(facets : List[Facet],
         tokenizer=llm.get_tokenizer(),
         conversations=conversations,
         cfg=cfg, **kwargs) if conversationsFacets is None else conversationsFacets
+    
     print("Getting embeddings")
     conversationsEmbedings = getEmbeddings(
         facets=facets,
         conversationsFacets=conversationsFacets,
         embeddingModel=embeddingModel,
         batchSize=embedBatchSize) if conversationsEmbedings is None else conversationsEmbedings
-    print("Getting base clusters")
     
+    print("Getting base clusters")
     kMeans, baseClusters = getBaseClusters(
         facets=facets,
         llm=llm,
         conversationsFacets=conversationsFacets,
         conversationsEmbedings=conversationsEmbedings,
-        numberOfBaseClusters=numberOfBaseClusters,
-        nLLMSamplesPerCluster=nLLMSamplesPerCluster,
-        batchSize=llmBatchSize,
-        seed=seed,
-        **kwargs) if kMeans is None or baseClusters is None else (kMeans, baseClusters)
+        cfg=cfg) if kMeans is None or baseClusters is None else (kMeans, baseClusters)
+    
     print("Getting higher level clusters")
     higherCategories, dedupedCategories, parents = getHierarchy(
         facets=facets,
         llm=llm,
-        tokenizer=llm.get_tokenizer(),
         embeddingModel=embeddingModel,
         baseClusters=baseClusters,
-        nClustersOutside=nClustersOutside,
-        nCategorizeSamples=nCategorizeSamples,
-        desiredNames=desiredNames,
-        embedBatchSize=embedBatchSize,
-        llmBatchSize=llmBatchSize,
-        seed=seed,
-        **kwargs
+        cfg=cfg
     )
 
     return conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents
@@ -253,7 +264,7 @@ def getNeighborhoods(
                                    getInputs=lambda facetStrValue: facetStrValue,
                                    processBatch=processBatchFunc,
                                    processOutput=lambda facetValue, facetValuePrompt, outputEmbeddings: outputEmbeddings,
-                                   batchSize=embedBatchSize))
+                                   batchSize=cfg.embedBatchSize))
     facetNeighborhoods = []
     numValues = len(facetStrValues)
     # in the paper this is numClusters // 40
@@ -275,15 +286,25 @@ def getNeighborhoods(
 
     return kmeans, facetNeighborhoods
 
+'''
+Extracts a hierarchy of labels, starting with baseClusters at the lowest level
+1. Get "neighborhoods" composed of 
+k = cfg.nAverageClustersPerNeighborhood(numValues)
+clusters via embedding cluster names and summaries, and adding cfg.nSamplesOutsideNeighborhood extra closest to but outside of the kmeans cluster.
+2. Get some names from each of those neighborhoods
+
+'''
 def getHierarchy(
     facets : List[Facet],
     llm : vllm.LLM,
     embeddingModel : SentenceTransformer,
-    baseClusters : List[Optional[List[]]]):
-    def processBatchFuncLLM(prompts):
-        nonlocal seed
+    baseClusters : List[Optional[List[ConversationCluster]]],
+    cfg : OpenClioConfig):
+    seed = cfg.seed
+    def processBatchFuncLLM(prompts : List[str]) -> List[str]:
+        nonlocal seed # we increment it so duplicate entries will get distinct things
         seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
+        samplingParams = vllm.SamplingParams(seed=cfg.seed, **cfg.llmExtraInferenceArgs)
         modelOutputs = llm.generate(prompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs] 
     
@@ -292,178 +313,188 @@ def getHierarchy(
 
         curLevelFacetClusters = baseClusters[facetI]
 
-        #### Get embeddings for clusters ####
+        while len(curLevelFacetClusters) > cfg.minTopLevelSize:
 
-        print("getting category neighborhoods")
-        kmeans, facetNeighborhoods = getNeighborhoods(facet,
-                    facetValues=curLevelFacetClusters,
-                    valueMap=lambda cluster: f"{cluster.name}\n{cluster.summary}",
-                    embeddingModel=embeddingModel,
-                    embedBatchSize=embedBatchSize,
-                    kFunc=lambda n: max(1, n//40),
-                    nClustersOutside=nClustersOutside,
-                    seed=seed)
+            #### Get embeddings for clusters ####
 
-        #### Get higher level category names ####
+            Sources: TypeAlias = List[int]
 
-        print("getting higher level category names")
-        def getInputsFunc(clusterIndicesInNeighborhood):
-            clustersInNeighborhood = [curLevelFacetClusters[i] for i in clusterIndicesInNeighborhood]
-            # shuffle ordering
-            random.shuffle(clustersInNeighborhood)
-            # idk desiredNames
-            return getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, desiredNames)
+            print("getting category neighborhoods")
+            kmeans, facetNeighborhoods = getNeighborhoods(facet,
+                        facetStrValues=map(lambda cluster: f"{cluster.name}\n{cluster.summary}", curLevelFacetClusters),
+                        embeddingModel=embeddingModel,
+                        cfg=cfg)
+
+            #### Get higher level category names ####
+
+            print("getting higher level category names")
+            def getInputsFunc(clusterIndicesInNeighborhood : Sources) -> str:
+                clustersInNeighborhood = [curLevelFacetClusters[i] for i in clusterIndicesInNeighborhood]
+                # shuffle ordering
+                random.shuffle(clustersInNeighborhood)
+                return getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)))
+            
+            def processOutputFunc(clusterIndicesInNeighborhood : Sources, clusterPrompt : str, clusterNamesOutput : str) -> List[Tuple[str, Sources]]:
+                # also store where it came from
+                # also remove punctuation
+                return [(removePunctuation(output).strip(), clusterIndicesInNeighborhood) for output in extractAnswerNumberedList(clusterNamesOutput)]
+            
+            def dedupAndMergeSources(values : List[Tuple[str, Sources]]) : List[Tuple[str, Sources]]:
+                resultValues = defaultdict(lambda: set())
+                for (value, sources) in values:
+                    resultValues[value] |= set(sources)
+                return sorted(list(resultValues.items()))
+            
+            # dedup exact named matches
+            higherCategories = dedupAndMergeSources(
+                    flatten(
+                        runBatched(facetNeighborhoods,
+                            getInputs=getInputsFunc,
+                            processBatch=processBatchFuncLLM,
+                            processOutput=processOutputFunc,
+                            batchSize=cfg.llmBatchSize)
+                    )
+            )
+
+            #### Dedup higher categories ####
+            
+            print("getting higher level category neighborhoods")
+            kmeans, facetNeighborhoods = getNeighborhoods(facet,
+                        facetStrValues=[name for (name, sources) in higherCategories],
+                        embeddingModel=embeddingModel,
+                        cfg=cfg)
+            
+            print("deduping higher level categories")
+            def getInputsFunc(higherCategoryIndicesInNeighborhoods : List[Tuple[str, Sources]]) -> str:
+                # 0 is value, 1 is sources
+                higherCategoriesInNeighborhood = [higherCategories[i][0] for i in higherCategoryIndicesInNeighborhoods]
+                targetAmount =  max(1, len(higherCategoriesInNeighborhood)-1) # aim for -1 (arbitrary), but prompt lets it do more or less as needed
+                if len(higherCategoriesInNeighborhood) == 2:
+                    targetAmount = 2 # for only two, it'll mangle the categories if we ask it to dedup them into one, so don't do that
+                return getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, targetAmount)
+            
+            def processOutputFunc(
+                    higherCategoryIndicesInNeighborhoods : List[Tuple[str, Sources]],
+                    higherCategoryDedupPrompt : str,
+                    higherCategoryDedupOutput : str) -> List[Tuple[str, Sources]]:
+                # get sources in terms of original categories (union over all the different higher category inputs to this dedup)
+                allSources = set()
+                for (higherCategory, higherCategorySources) in [higherCategories[i] for i in higherCategoryIndicesInNeighborhoods]:
+                    allSources |= set(higherCategorySources)
+                allSources = sorted(list(allSources))
+                return [(removePunctuation(output).strip(), allSources) for output in extractAnswerNumberedList(higherCategoryDedupOutput)]
+            
+            # todo: size 1 or 2 clusters, just ignore them (size 2 maybe set desired to 2? unless very high overlap in embed? idk)
+            dedupedCategories = dedupAndMergeSources(
+                    flatten(
+                        runBatched(facetNeighborhoods,
+                            getInputs=getInputsFunc,
+                            processBatch=processBatchFuncLLM,
+                            processOutput=processOutputFunc,
+                            batchSize=cfg.llmBatchSize)
+                    )
+            )
+            
+            #### Assign to new best fit higher-level cluster ####
+
+            # (they didn't specify how to choose what to put here, but I figure just tracking where parents came from and using all those that might have come from x should work fine)
+            print("Assigning to best fit higher-level clusters")
+            baseClusterPotentialHigherLevelClusters : List[List[str]] = [[] for _ in curLevelFacetClusters]
+            for category, sources in dedupedCategories:
+                for sourceI in sources:
+                    baseClusterPotentialHigherLevelClusters[sourceI].append(category)
+            
+            def getInputsFunc(facetClusterData : Tuple[ConversationCluster, List[int]]) -> List[str]:
+                facetCluster, potentialHigherLevelClusters = facetClusterData
+                assignToHigherCategoryPrompts = []
+                for i in range(cfg.nCategorizeSamples):
+                    random.shuffle(potentialHigherLevelClusters)
+                    assignToHigherCategoryPrompts.append(getAssignToHighLevelClusterPrompt(llm.get_tokenizer(), clusterToAssign=facetCluster, higherLevelClusters=potentialHigherLevelClusters))
+                return assignToHigherCategoryPrompts
+
+            # name and summary will be generated later
+            parents = dict([(categoryName.lower().strip(), ConversationCluster(facet=facet, name=categoryName, summary="")) for (categoryName, categorySources) in dedupedCategories])
+            
+            def processOutputFunc(facetClusterData, assignToHigherCategoryPrompts, assignToHigherCategoryOutput):
+                facetCluster, potentialHigherLevelClusters = facetClusterData
+                counts = defaultdict(lambda: [])
+                for output in assignToHigherCategoryOutput:
+                    foundOutput, outputValue = extractTagValue(output, "answer")
+                    # remove cluster and punctuation if it added it
+                    outputValue = removePunctuation(outputValue.replace("<cluster>", "").replace("</cluster>", "").strip())
+                    if foundOutput:
+                        counts[outputValue.lower()].append(outputValue)
+                mostCommonKey, mostCommonValue = max(list(counts.items()), key=lambda x: len(x[1]))
+                if mostCommonKey in parents.keys():
+                    if parents[mostCommonKey].children is None:
+                        parents[mostCommonKey].children = []
+                    parents[mostCommonKey].children.append(facetCluster)
+                    facetCluster.parent = parents[mostCommonKey]
+                else:
+                    raise ValueError("(todo: use embedding to lookup) Could not find key: " + mostCommonKey)
+                return None
+
+            runBatched(list(zip(curLevelFacetClusters, baseClusterPotentialHigherLevelClusters)),
+                getInputs=getInputsFunc,
+                processBatch=processBatchFuncLLM,
+                processOutput=processOutputFunc,
+                batchSize=llmBatchSize)
+
+            # remove any parents that didn't have any children assigned
+            for parentKey, parentValue in list(parents.items()):
+                if parentValue.children is None or len(parentValue.children) == 0:
+                    del parents[parent]
+
+            #### Rename categories based on which children they were given ####
+
+            print("Renaming categories based on children")
+            def getInputsFunc(parent :):
+                renamingPrompts = []
+                for _ in range(cfg.nRenameSamples):
+                    random.shuffle(parent.children[:maxNChildrenForRenaming])
+                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, llm.get_tokenizer(), parent.children))
+                return renamingPrompts
+            
+            def processOutputFunc(parent, renamePrompt, renamingOutputs):
+                summary, name = getMostCommonSummaryAndName(renamingOutputs)
+                parent.summary = summary
+                parent.name = name
         
-        def processOutputFunc(clusterIndicesInNeighborhood, clusterPrompt, clusterNamesOutput):
-            # also store where it came from
-            # also remove punctuation
-            return [(removePunctuation(output).strip(), clusterIndicesInNeighborhood) for output in extractAnswerNumberedList(clusterNamesOutput)]
-                
-        def dedupAndMergeSources(values):
-            resultValues = defaultdict(lambda: set())
-            for (value, sources) in values:
-                resultValues[value] |= set(sources)
-            return sorted(list(resultValues.items()))
-        
-        # dedup exact named matches
-        higherCategories = dedupAndMergeSources(
-                flatten(
-                    runBatched(facetNeighborhoods,
-                        getInputs=getInputsFunc,
-                        processBatch=processBatchFuncLLM,
-                        processOutput=processOutputFunc,
-                        batchSize=llmBatchSize)
-                )
-        )
+            runBatched(list(parents.values()),
+                getInputs=getInputsFunc,
+                processBatch=processBatchFuncLLM,
+                processOutput=processOutputFunc,
+                batchSize=llmBatchSize)
 
-        #### Dedup higher categories ####
-        
-        print("getting higher level category neighborhoods")
-        kmeans, facetNeighborhoods = getNeighborhoods(facet,
-                    facetValues=higherCategories,
-                    # [1] is the sources
-                    valueMap=lambda categoryName: categoryName[0],
-                    embeddingModel=embeddingModel,
-                    embedBatchSize=embedBatchSize,
-                    kFunc=lambda n: n//5, # picked this arbitrairly
-                    nClustersOutside=0, # picked this arbitrairly
-                    seed=seed)
-        
-        print("deduping higher level categories")
-        def getInputsFunc(higherCategoryIndicesInNeighborhoods):
-            # [1] is the sources
-            higherCategoriesInNeighborhood = [higherCategories[i][0] for i in higherCategoryIndicesInNeighborhoods]
-            targetAmount =  max(1, len(higherCategoriesInNeighborhood)-1)
-            if len(higherCategoriesInNeighborhood) == 2:
-                targetAmount = 2 # for only two, it'll mangle the categories if we ask it to dedup them into one, so don't do that
-            return getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, targetAmount)
-        
-        def processOutputFunc(higherCategoryIndicesInNeighborhoods, higherCategoryDedupPrompts, higherCategoryDedupOutput):
-            # get sources in terms of original categories (union over all the different higher category inputs to this dedup)
-            allSources = set()
-            for (higherCategory, higherCategorySources) in [higherCategories[i] for i in higherCategoryIndicesInNeighborhoods]:
-                allSources |= set(higherCategorySources)
-            allSources = sorted(list(allSources))
-            return [(removePunctuation(output).strip(), allSources) for output in extractAnswerNumberedList(higherCategoryDedupOutput)]
-        
-        # todo: size 1 or 2 clusters, just ignore them (size 2 maybe set desired to 2? unless very high overlap in embed? idk)
-        dedupedCategories = dedupAndMergeSources(
-                flatten(
-                    runBatched(facetNeighborhoods,
-                        getInputs=getInputsFunc,
-                        processBatch=processBatchFuncLLM,
-                        processOutput=processOutputFunc,
-                        batchSize=llmBatchSize)
-                )
-        )
-        
-        #### Assign to new best fit higher-level cluster ####
-
-        # (they didn't specify how to choose what to put here, but I figure just tracking where parents came from and using all those that might have come from x should work fine)
-        print("Assigning to best fit higher-level clusters")
-        baseClusterPotentialHigherLevelClusters = [[] for _ in curLevelFacetClusters]
-        for category, sources in dedupedCategories:
-            for sourceI in sources:
-                baseClusterPotentialHigherLevelClusters[sourceI].append(category)
-        
-        def getInputsFunc(facetClusterData):
-            facetCluster, potentialHigherLevelClusters = facetClusterData
-            assignToHigherCategoryPrompts = []
-            for i in range(nCategorizeSamples):
-                random.shuffle(potentialHigherLevelClusters)
-                assignToHigherCategoryPrompts.append(getAssignToHighLevelClusterPrompt(llm.get_tokenizer(), clusterToAssign=facetCluster, higherLevelClusters=potentialHigherLevelClusters))
-            print(assignToHigherCategoryPrompts[0])
-            return assignToHigherCategoryPrompts
-
-        # name and summary will be generated later
-        parents = dict([(categoryName.lower().strip(), ConversationCluster(facet=facet, name=categoryName, summary="")) for (categoryName, categorySources) in dedupedCategories])
-        
-        def processOutputFunc(facetClusterData, assignToHigherCategoryPrompts, assignToHigherCategoryOutput):
-            facetCluster, potentialHigherLevelClusters = facetClusterData
-            counts = defaultdict(lambda: [])
-            for output in assignToHigherCategoryOutput:
-                foundOutput, outputValue = extractTagValue(output, "answer")
-                # remove cluster if it added it
-                outputValue.replace("<cluster>", "").replace("</cluster>", "").strip()
-                if foundOutput:
-                    counts[outputValue.lower()].append(outputValue)
-            mostCommonKey, mostCommonValue = max(list(counts.items()), key=lambda x: len(x[1]))
-            if mostCommonKey in parents.keys():
-                if parents[mostCommonKey].children is None:
-                    parents[mostCommonKey].children = []
-                parents[mostCommonKey].children.append(facetCluster)
-                facetCluster.parent = parents[mostCommonKey]
-            else:
-                raise ValueError("(todo: use embedding to lookup) Could not find key: " + mostCommonKey)
-            return None
-
-        runBatched(list(zip(curLevelFacetClusters, baseClusterPotentialHigherLevelClusters)),
-            getInputs=getInputsFunc,
-            processBatch=processBatchFuncLLM,
-            processOutput=processOutputFunc,
-            batchSize=llmBatchSize)
-
-        # remove any parents that didn't have any children assigned
-        for parentKey, parentValue in list(parents.items()):
-            if parentValue.children is None or len(parentValue.children) == 0:
-                del parents[parent]
-        #### Rename categories based on which children they were given ####
-        print("Renaming categories based on children")
-        def getInputsFunc(parent):
-            renamingPrompts = []
-            for _ in range(nCategorizeSamples):
-                random.shuffle(parent.children[:maxNChildrenForRenaming])
-                renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, llm.get_tokenizer(), parent.children))
-            return renamingPrompts
-        
-        def processOutputFunc(parent, renamePrompt, renamingOutputs):
-            summary, name = getMostCommonSummaryAndName(renamingOutputs)
-            parent.summary = summary
-            parent.name = name
-     
-        runBatched(list(parents.values()),
-            getInputs=getInputsFunc,
-            processBatch=processBatchFuncLLM,
-            processOutput=processOutputFunc,
-            batchSize=llmBatchSize)
-
-        return higherCategories, dedupedCategories, parents
+            # Now those parents are our current level, go up higher
+            curLevelFacetClusters = parents
 
 
 
+'''
+Gets the base-level clusters for all facets that have shouldMakeFacetClusters(facet) True
+Returns (listOfKMeansForFacets, listOfListOfConversationClusters)
+where 
+listOfKMeansForFacets has a kmeans (or None) for each facet,
+and
+listOfListOfConversationClusters has a list of ConversationCluster for each facet
+there will be cfg.nBaseClusters number of ConversationClusters in that list
+'''
 def getBaseClusters(
-    facets : List[Facet],
-    llm : vllm.LLM,
-    conversationsFacets,
-    conversationsEmbedings):
+        facets : List[Facet],
+        llm : vllm.LLM,
+        conversationsFacets : List[ConversationFacetData],
+        conversationsEmbedings : List[Optional[EmbeddingArray]],
+        cfg : OpenClioConfig
+    ) -> Tuple[List[KMeans], List[Optional[List[ConversationCluster]]]]:
     tokenizer = llm.get_tokenizer()
     kMeansFacets = []
-    def getInputsFunc(facetAndEmbeddings):
+    def getInputsFunc(facetAndEmbeddings : Tuple[int, Tuple[Facet, EmbeddingArray]]) -> List[List[str]]:
         lookupClusterPrompts = []
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
         if shouldMakeFacetClusters(facet):
             print(f"Running kmeans for facet {facet.name}")
-            kmeans = KMeans(n_clusters=numberOfBaseClusters, random_state=seed)
+            kmeans = KMeans(n_clusters=cfg.nBaseClusters, random_state=seed)
             kmeans.fit(preprocessing.normalize(facetEmbeddings))
             distances = cdist(facetEmbeddings, kmeans.cluster_centers_)
             kMeansFacets.append(kmeans)
@@ -494,14 +525,18 @@ def getBaseClusters(
             kMeansFacets.append(None)
         return lookupClusterPrompts
     
-    def processBatchFunc(batchOfPrompts):
+    def processBatchFunc(batchOfPrompts : List[str]) -> List[str]:
         nonlocal seed
         seed += 1
         samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
         modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
-    def processOutputFunc(facetAndEmbeddings, clusterPrompts, outputs):
+    def processOutputFunc(
+            facetAndEmbeddings : Tuple[int, Tuple[Facet, EmbeddingArray]],
+            clusterPrompts: List[List[str]],
+            outputs: List[List[str]]
+        ) -> List[ConversationCluster]:
         outputClusters = []
         facetI, (facet, facetEmbeddings) = facetAndEmbeddings
         if shouldMakeFacetClusters(facet):
@@ -523,17 +558,27 @@ def getBaseClusters(
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,
-               batchSize=batchSize)
+               batchSize=cfg.llmBatchSize)
 
+'''
+Returns true if we should make the cluster hierarchy for the given facet
+'''
 def shouldMakeFacetClusters(facet):
     return facet.summaryCriteria is not None
 
+'''
+Gets the embeddings of all facet values that have shouldMakeFacetClusters(facet) True
+(this is when the facet has a summaryCriteria that is not None)
+Returns one element for each facet value
+That element will either be None if shouldMakeFacetClusters(facet) is False,
+or a numpy array of size [numConversations, embeddingDim]
+'''
 def getEmbeddings(
         facets: List[Facet],
-        conversationsFacets,
-        embeddingModel,
-        cfg: ):
-    def getInputsFunc(facetI):
+        conversationsFacets : List[ConversationFacetData],
+        embeddingModel : SentenceTransformer,
+        cfg: OpenClioConfig) -> List[Optional[EmbeddingArray]]:
+    def getInputsFunc(facetI : int) -> List[str]:
         facetInputs = []
         facet = facets[facetI]
         if shouldMakeFacetClusters(facet):
@@ -542,11 +587,11 @@ def getEmbeddings(
                 facetInputs.append(facetValue)
         return facetInputs
     
-    def processBatchFunc(batchOfTextInputs):
+    def processBatchFunc(batchOfTextInputs : List[str]) -> List[npt.NDArray[int, np.float32]]:
         embedded = embeddingModel.encode(batchOfTextInputs)
         return [embedded[i] for i in range(len(batchOfTextInputs))]
 
-    def processOutputFunc(facetI, facetInputs, embeddings):
+    def processOutputFunc(facetI : int, facetInputs : List[str], embeddings : List[npt.NDArray[int, np.float32]]) -> Optional[EmbeddingArray]:
         facet = facets[facetI]
         if shouldMakeFacetClusters(facet):
             return np.stack(embeddings)
@@ -606,12 +651,10 @@ def extractTagValue(output: str, tag: str) -> Tuple[bool, str]:
     posOfTag = output.lower().find(f"<{tag}>")
     if posOfTag != -1:
         output = output[posOfTag + len(f"<{tag}>"):].strip()
-        endOfTagPos = output.lower().find(f"</{tag}>")
-        if endOfTagPos != -1:
-            output = output[:endOfTagPos].strip()
-            return True, output
-        return False, output
-    return False, output
+    endOfTagPos = output.lower().find(f"</{tag}>")
+    if endOfTagPos != -1:
+        output = output[:endOfTagPos].strip()
+    return posOfTag != -1 and endOfTagPos != -1, output
 
 '''
 If we have
@@ -669,38 +712,32 @@ def conversationToString(conversation : List[Dict[str, str]]) -> str:
     return "\n".join([f"{turn['role']}:\n{turn['content']}" for turn in conversation])
 
 '''
-Gets values for every conversation for each of the facets provided,
-Using the provided llm.
+Gets facet values for every conversation, for each of the facets provided, using the provided llm.
+Returns a list of ConversationFacetData objects,
+one for each conversation
 '''
 def getFacets(
     facets : List[Facet],
     llm : vllm.LLM,
-    conversations: List[Dict[str, str]]) -> List[ConversationFacetData]:
-    def getInputsFunc(conversation):
+    conversations: List[List[Dict[str, str]]]) -> List[ConversationFacetData]:
+    def getInputsFunc(conversation : List[Dict[str, str]]) -> List[str]:
         conversationStr = conversationToString(conversation)
         # runBatched will automatically flatten these into us for nice batched usage,
         # then unflatten them back before calling processOutputFunc
         # so we can send in whatever sort of nested lists we want (though in this case it's only one deep)
         return [getFacetPrompt(llm.get_tokenizer(), conversationStr, facet.question, facet.prefill) for facet in facets]
 
-    def processBatchFunc(batchOfPrompts):
+    def processBatchFunc(batchOfPrompts : List[str]) -> List[str]:
         nonlocal seed
         seed += 1
         samplingParams = vllm.SamplingParams(seed=seed, **kwargs)
         modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
-    def processOutputFunc(conversation, conversationPrompts, facetOutputs):
-        def getAnswer(output):
-            matches = re.findall(r"(.*?)(?:</answer>|$)", output, re.DOTALL)
-            if len(matches) > 0:
-                for answer in matches:
-                    return cleanOutput(answer)
-            return cleanOutput(output) # failed to match, just return cleaned output
-        facetValues = [FacetValue(facet=facet, value=getAnswer(value)) for (facet, value) in zip(facets, facetOutputs)]
+    def processOutputFunc(conversation : List[Dict[str, str]], conversationPrompts : List[str], facetOutputs : List[str]) -> ConversationFacetData:
         return ConversationFacetData(
             conversation=conversation,
-            facetValues=facetValues
+            facetValues=[FacetValue(facet=facet, value=cleanTrailingTagsInOutput(extractTagValue(value, "answer")) for (facet, value) in zip(facets, facetOutputs)]
         )
 
     return runBatched(conversations,
