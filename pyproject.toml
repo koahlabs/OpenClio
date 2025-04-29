@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mamba_lens"
+authors = [
+    {name = "Danielle Ensign", email = "phylliida.dev@gmail.com"},
+]
+description = "Open source version of Anthropic's Clio: A system for privacy-preserving insights into real-world AI use"
+readme = "README.md"
+requires-python = ">=3.0"
+license = {text = "MIT License"}
+classifiers = [
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "dataclasses",
+    "vllm",
+    "pandas",
+    "sentence_transformers",
+    "numpy",
+    "scikit-learn",
+    "scipy",
+    "torch",
+    "cloudpickle",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/Phylliida/OpenClio.git"
+Issues = "https://github.com/Phylliida/OpenClio/issues"

@@ -155,26 +155,30 @@ def getData():
 
 
 
+def convertOutputToJsonChunks(output, targetDir):
+    pass    
+
+
 
 @dataclass
 class OpenClioResults:
     conversationsFacets: List[ConversationFacetData]
-    conversationsEmbedings: List[Optional[EmbeddingArray]]
+    conversationsEmbeddings: List[Optional[EmbeddingArray]]
     baseKMeans: List[KMeans]
     baseClusters: List[Optional[List[ConversationCluster]]]
     rootClusters: List[Optional[List[ConversationCluster]]]
 
-# conversationsFacetsSmol, conversationsEmbedingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
-# conversationsFacetsSmol, conversationsEmbedingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbedings=conversationsEmbedingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
-# conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
-# conversationsFacets, conversationsEmbedings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacets, conversationsEmbedings=conversationsEmbedings, kMeans=kMeans, baseClusters=baseClusters)
+# conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
+# conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbeddings=conversationsEmbeddingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
+# conversationsFacets, conversationsEmbeddings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
+# conversationsFacets, conversationsEmbeddings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacets, conversationsEmbeddings=conversationsEmbeddings, kMeans=kMeans, baseClusters=baseClusters)
 def runClio(facets : List[Facet], 
             llm : vllm.LLM,
             embeddingModel : SentenceTransformer,
             conversations : List[str],
             cfg : OpenClioConfig = None,
             conversationsFacets: List[ConversationFacetData] = None,
-            conversationsEmbedings: List[Optional[EmbeddingArray]] = None,
+            conversationsEmbeddings: List[Optional[EmbeddingArray]] = None,
             baseKMeans: List[KMeans] = None,
             baseClusters: List[Optional[List[ConversationCluster]]] = None
         ) -> OpenClioResults:
@@ -192,24 +196,24 @@ def runClio(facets : List[Facet],
         cfg=cfg) if conversationsFacets is None else conversationsFacets
     
     print("Getting embeddings")
-    conversationsEmbedings: List[Optional[EmbeddingArray]] = getEmbeddings(
+    conversationsEmbeddings: List[Optional[EmbeddingArray]] = getEmbeddings(
         facets=facets,
         conversationsFacets=conversationsFacets,
         embeddingModel=embeddingModel,
-        cfg=cfg) if conversationsEmbedings is None else conversationsEmbedings
+        cfg=cfg) if conversationsEmbeddings is None else conversationsEmbeddings
     
     with open("chonkers/tmpClioResultsTotesf1.pkl", "wb") as f:
-        cloudpickle.dump((conversationsFacets, conversationsEmbedings), f)
+        cloudpickle.dump((conversationsFacets, conversationsEmbeddings), f)
     print("Getting base clusters")
     baseKMeans, baseClusters = getBaseClusters(
         facets=facets,
         llm=llm,
         embeddingModel=embeddingModel,
         conversationsFacets=conversationsFacets,
-        conversationsEmbedings=conversationsEmbedings,
+        conversationsEmbeddings=conversationsEmbeddings,
         cfg=cfg) if baseKMeans is None or baseClusters is None else (baseKMeans, baseClusters)
     with open("chonkers/tmpClioResultsTotesf2.pkl", "wb") as f:
-        cloudpickle.dump((conversationsFacets, conversationsEmbedings, baseKMeans, baseClusters), f)
+        cloudpickle.dump((conversationsFacets, conversationsEmbeddings, baseKMeans, baseClusters), f)
     
     print("Getting higher level clusters")
     rootClusters : List[Optional[List[ConversationCluster]]] = getHierarchy(
@@ -222,7 +226,7 @@ def runClio(facets : List[Facet],
 
     return OpenClioResults(
         conversationsFacets=conversationsFacets,
-        conversationsEmbedings=conversationsEmbedings,
+        conversationsEmbeddings=conversationsEmbeddings,
         baseKMeans=baseKMeans,
         baseClusters=baseClusters,
         rootClusters=rootClusters
@@ -549,7 +553,7 @@ def getBaseClusters(
         llm : vllm.LLM,
         embeddingModel : SentenceTransformer,
         conversationsFacets : List[ConversationFacetData],
-        conversationsEmbedings : List[Optional[EmbeddingArray]],
+        conversationsEmbeddings : List[Optional[EmbeddingArray]],
         cfg : OpenClioConfig
     ) -> Tuple[List[Optional[KMeans]], List[Optional[List[ConversationCluster]]]]:
     tokenizer = llm.get_tokenizer()
@@ -626,7 +630,7 @@ def getBaseClusters(
         else:
             return None
 
-    return kMeansFacets, runBatched(list(enumerate(zip(facets, conversationsEmbedings))),
+    return kMeansFacets, runBatched(list(enumerate(zip(facets, conversationsEmbeddings))),
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,

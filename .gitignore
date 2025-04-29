@@ -2,9 +2,6 @@ train-00000-of-00006.parquet
 
 chonkers/
 
-# Safety tooling env
-.env
-
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
