@@ -356,11 +356,12 @@ def getHierarchy(
             #### Get higher level category names ####
 
             print("getting higher level category names")
+            tokenizer = llm.get_tokenizer()
             def getInputsFunc(clusterIndicesInNeighborhood : Sources) -> str:
                 clustersInNeighborhood = [curLevelFacetClusters[i] for i in clusterIndicesInNeighborhood]
                 # shuffle ordering
                 random.shuffle(clustersInNeighborhood)
-                return getNeighborhoodClusterNamesPrompt(facet, llm.get_tokenizer(), clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)))
+                return getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)))
             
             def processOutputFunc(clusterIndicesInNeighborhood : Sources, clusterPrompt : str, clusterNamesOutput : str) -> List[Tuple[str, Sources]]:
                 # also store where it came from
@@ -399,7 +400,7 @@ def getHierarchy(
                 targetAmount =  max(1, len(higherCategoriesInNeighborhood)-1) # aim for -1 (arbitrary), but prompt lets it do more or less as needed
                 if len(higherCategoriesInNeighborhood) == 2:
                     targetAmount = 2 # for only two, it'll mangle the categories if we ask it to dedup them into one, so don't do that
-                return getDeduplicateClusterNamesPrompt(facet, llm.get_tokenizer(), higherCategoriesInNeighborhood, targetAmount)
+                return getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, targetAmount)
             
             def processOutputFunc(
                     higherCategoryIndicesInNeighborhoods : List[Tuple[str, Sources]],
@@ -437,7 +438,7 @@ def getHierarchy(
                 assignToHigherCategoryPrompts = []
                 for i in range(cfg.nCategorizeSamples):
                     random.shuffle(potentialHigherLevelClusters)
-                    assignToHigherCategoryPrompts.append(getAssignToHighLevelClusterPrompt(llm.get_tokenizer(), clusterToAssign=facetCluster, higherLevelClusters=potentialHigherLevelClusters))
+                    assignToHigherCategoryPrompts.append(getAssignToHighLevelClusterPrompt(tokenizer, clusterToAssign=facetCluster, higherLevelClusters=potentialHigherLevelClusters))
                 return assignToHigherCategoryPrompts
 
             # name and summary will be generated later
@@ -489,7 +490,7 @@ def getHierarchy(
                 renamingPrompts = []
                 for _ in range(cfg.nRenameSamples):
                     random.shuffle(parent.children)
-                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, llm.get_tokenizer(), parent.children[:cfg.maxChildrenForRenaming]))
+                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, tokenizer, parent.children[:cfg.maxChildrenForRenaming]))
                 return renamingPrompts
             
             def processOutputFunc(parent : ConversationCluster, renamePrompts : List[str], renamingOutputs : List[str]):
@@ -671,12 +672,13 @@ def getFacets(
         conversations: List[List[Dict[str, str]]],
         cfg : OpenClioConfig
     ) -> List[ConversationFacetData]:
+    tokenizer = llm.get_tokenizer()
     def getInputsFunc(conversation : List[Dict[str, str]]) -> List[str]:
         conversationStr = conversationToString(conversation)
         # runBatched will automatically flatten these into us for nice batched usage,
         # then unflatten them back before calling processOutputFunc
         # so we can send in whatever sort of nested lists we want (though in this case it's only one deep)
-        return [getFacetPrompt(llm.get_tokenizer(), conversationStr, facet.question, facet.prefill) for facet in facets]
+        return [getFacetPrompt(tokenizer, conversationStr, facet.question, facet.prefill) for facet in facets]
     seed = cfg.seed
     def processBatchFunc(batchOfPrompts : List[str]) -> List[str]:
         nonlocal seed
@@ -732,8 +734,8 @@ def getMostCommonSummaryAndName(outputs: List[str]) -> Tuple[str, str]:
         matches = re.findall(r"(.*?)</summary>.*?<name>(.*?)</name>", output, re.DOTALL)
         if len(matches) > 0:
             for summary, name in matches:
-                summaryCounts[cleanOutput(summary)] += 1
-                nameCounts[cleanOutput(name)] += 1
+                summaryCounts[cleanTrailingTagsInOutput(summary)] += 1
+                nameCounts[cleanTrailingTagsInOutput(name)] += 1
     def largestCountItem(counts, fieldName):
         if len(counts) == 0: return f"<Could not extract {fieldName}>"
         counts = sorted(list(counts.items()), key=lambda x: (-x[1], x[0]))
