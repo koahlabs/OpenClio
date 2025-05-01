@@ -15,6 +15,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
 from collections import defaultdict
+import json
 import torch
 import os
 import re
@@ -154,112 +155,6 @@ class OpenClioConfig:
     }) # Extra parameters to pass into vllm.SamplingParams
 
 
-def getModels():
-    model_str = "Qwen/Qwen2.5-7B-Instruct"
-    llm = vllm.LLM(model=model_str)
-    embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-    return llm, embeddingModel
-
-
-def getData():
-    d = pd.read_parquet("train-00000-of-00006.parquet", engine="pyarrow")
-    return [d.iloc[i].conversation for i in range(len(d))]
-
-# 0 is root/highest level
-def getAllClustersAtLevel(facetI: int, output: OpenClioResults, level: int):
-    def getAllClustersAtLevelHelper(currentLevelItems: List[ConversationCluster], targetLevel: int):
-        if targetLevel <= 0:
-            return currentLevelItems
-        else:
-            lowerLevelItems = flatten([item.children for item in currentLevelItems if item.children is not None])
-            return getAllClustersAtLevelHelper(lowerLevelItems, targetLevel-1)
-    return getAllClustersAtLevelHelper(output.rootClusters[facetI], targetLevel=level)
-
-# we are guaranteed every cluster except base level is non empty so we can just dfs
-def getNumLevels(output: OpenClioResults, facetI: int):
-    def getDepthHelper(currentItem):
-        if currentItem.children is None:
-            return 1
-        else:
-            return getDepthHelper(currentItem.children[0])+1
-    return getDepthHelper(output.rootClusters[facetI][0])
-
-def encodeClusterAsJson(output: OpenClioResults, cluster: ConversationCluster, currentLevel: int, highestLevelInclusive: int, fileMap: Dict[Tuple[str, str], str]):
-    def encodeClusterJsonHelper(cluster: ConversationCluster, currentLevel: int, highestLevelInclusive: int):
-        # at the highest level, just store references to children via their files
-        if currentLevel >= highestLevelInclusive:
-            children = [fileMap[child] for child in cluster.children] if cluster.children is None else [] 
-        else:
-            children = [encodeClusterJsonHelper(child, currentLevel=currentLevel+1, highestLevelInclusive=highestLevelInclusive) for child in cluster] if cluster.children is None else [] 
-        res = {
-            "summary": cluster.summary,
-            "name": cluster.name,
-            "children": children,
-        }
-        if cluster.indices is not None:
-            # todo: add facet values
-            res["conversations"] = [output.conversations[i] for i in cluster.indices]
-        return res
-    return encodeClusterJson(output=output, cluster=cluster, currentLevel=currentLevel, highestLevelInclusive=highestLevelInclusive)
-
-def encodeLevels(facetI: int, output: OpenClioResults, lowerLevelInclusive: int, higherLevelInclusive: int, fileMap: Dict[Tuple[str, str], str]):
-    for cluster in getAllClustersAtLevel(facetI=facetI, output=output, level=lowerLevelInclusive):
-        yield cluster, encodeClusterAsJson(output=output, cluster=cluster, higherLevelInclusive=higherLevelInclusive)
-
-def findLowestLevelThatKeepsSizeLessThanMaxSize(facetI: int, output: OpenClioResults, curLevel: int, maxSizePerFile: int):
-    dummyFileMap = defaultdict(lambda: "aaaaaaaaaaaaaaaaaa"*5) # dummy file path
-    if curLevel == 0: # we are already at top level, just use that
-        return 0
-    # go curLevel-1, curLevel-2, ..., 0
-    for lowerLevel in range(max(0, curLevel-1), -1, -1):
-        for cluster, jsonData in encodeLevels(facetI, output, lowerLevel, curLevel):
-            if len(jsonData) > maxSizePerFile:
-                # we went too far, use previous one
-                return min(curLevel, lowerLevel+1)
-    # we can encode everything, use 0
-    return 0
-
-def convertOutputToJsonChunks(output: OpenClioResults, targetDir: str, maxSizePerFile: int):
-    # get the level closest to root (the top) that has less than or equal to maxConversationsPerFile per term
-    
-    rootJson = []
-    for facetI, facet in enumerate(output.facets):
-        facetJson = {
-            "name": facet.name,
-            "question": facet.question,
-            "prefill": facet.prefill,
-            "summaryCriteria": "" if facet.summaryCriteria is None else facet.summaryCriteria,
-            "numeric": [] if facet.numeric is None else list(facet.numeric)
-        }
-        if shouldMakeFacetClusters(facet):
-            targetDir = Path(targetDir) / facet.name
-            targetDir.mkdir(parents=True, exist_ok=True)
-
-            globalInd = 0
-
-            rootItems = []
-
-            numLevels = getNumLevels(output, facetI)
-            fileMap = {}
-            while curLevel >= 0:
-                curLevel = numLevels-1
-                lowerLevel = findLowestLevelThatKeepsSizeLessThanMaxSize(output=output, curLevel=curLevel, maxSizePerFile=maxSizePerFile)
-                for cluster, jsonData in encodeLevels(output=output, lowerLevelInclusive=lowerLevel, higherLevelInclusive=curLevel):
-                    outputPath = targetDir / f"data{globalInd}.json"
-                    with open(outputPath, "w") as f:
-                        f.write(jsonData)
-                    fileMap[cluster] = outputPath
-                    if curLevel == 0:
-                        rootItems.append(outputPath)
-                    globalInd += 1
-                curLevel = lowerLevel - 1
-            facetJson["hierarchy"] = rootItems
-        rootJson.append(facetJson)
-    return rootJson
-
-            
-
-
 
 @dataclass
 class OpenClioResults:
@@ -270,6 +165,180 @@ class OpenClioResults:
     baseClusters: List[Optional[List[ConversationCluster]]]
     rootClusters: List[Optional[List[ConversationCluster]]]
     conversations: List[List[Dict[str, str]]]
+
+def getModels():
+    model_str = "Qwen/Qwen3-8B"
+    llm = vllm.LLM(model=model_str)
+    embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
+    return llm, embeddingModel
+
+
+def getData():
+    d = pd.read_parquet("train-00000-of-00006.parquet", engine="pyarrow")
+    return [d.iloc[i].conversation for i in range(len(d))]
+
+
+
+# 0 is root/highest level
+def getAllClustersAtLevel(facetI: int, output: OpenClioResults, level: int):
+    def getAllClustersAtLevelHelper(cluster: ConversationCluster, targetLevel: int):
+        if targetLevel == 0:
+            yield cluster
+        else:
+            if cluster.children is not None:
+                for child in cluster.children:
+                    for childCluster in getAllClustersAtLevelHelper(cluster=child, targetLevel=targetLevel-1):
+                        yield childCluster
+    for rootCluster in output.rootClusters[facetI]:
+        for resultCluster in getAllClustersAtLevelHelper(rootCluster, targetLevel=level):
+            yield resultCluster
+
+# we are guaranteed every cluster except base level is non empty so we can just dfs
+def getNumLevels(output: OpenClioResults, facetI: int):
+    def getDepthHelper(currentItem):
+        if currentItem.children is None:
+            return 1
+        else:
+            return getDepthHelper(currentItem.children[0])+1
+    return getDepthHelper(output.rootClusters[facetI][0])
+
+def encodeClusterAsJson(facetI: int, output: OpenClioResults, cluster: ConversationCluster, currentLevel: int, highestLevelInclusive: int, fileMap: Dict[Tuple[str, str], str]):
+    def encodeClusterJsonHelper(cluster: ConversationCluster, currentLevel: int, highestLevelInclusive: int):
+        # at the highest level, just store references to children via their files
+        if currentLevel >= highestLevelInclusive:
+            children = [{"numConvs": child.numConversations, "path": fileMap[child]} for child in cluster.children if child.numConversations > 0] if cluster.children is not None else [] 
+        else:
+            children = [encodeClusterJsonHelper(child, currentLevel=currentLevel+1, highestLevelInclusive=highestLevelInclusive) for child in cluster.children if child.numConversations > 0] if cluster.children is not None else [] 
+        res = {
+            "summary": cluster.summary,
+            "name": cluster.name,
+            "children": children,
+            "numConvs": cluster.numConversations,
+        }
+        if cluster.children is None and cluster.filteredIndices is not None:
+            # todo: add facet values
+            conversations = []
+            for conversationI in cluster.filteredIndices:
+                data = output.conversationsFacets[conversationI]
+                facetValue = data.facetValues[facetI]
+                conversation = data.conversation
+                conversations.append({
+                    "facetValue": facetValue.value,
+                    "allFacetValues": [{"facet": value.facet.name, "value": value.value} for value in data.facetValues],
+                    "conversation": [{'role': turn['role'], "content": turn['content']} for turn in output.conversations[conversationI]]
+                })
+            res["conversations"] = conversations
+        return res
+    return json.dumps(encodeClusterJsonHelper(cluster=cluster, currentLevel=currentLevel, highestLevelInclusive=highestLevelInclusive))
+
+def encodeLevels(facetI: int, output: OpenClioResults, lowerLevelInclusive: int, highestLevelInclusive: int, fileMap: Dict[Tuple[str, str], str]):
+    for cluster in getAllClustersAtLevel(facetI=facetI, output=output, level=lowerLevelInclusive):
+        if cluster.numConversations > 0:
+            yield cluster, encodeClusterAsJson(facetI=facetI, output=output, cluster=cluster, currentLevel=lowerLevelInclusive, highestLevelInclusive=highestLevelInclusive, fileMap=fileMap)
+
+def findLowestLevelThatKeepsSizeLessThanMaxSize(facetI: int, output: OpenClioResults, curLevel: int, maxSizePerFile: int):
+    dummyFileMap = defaultdict(lambda: "aaaaaaaaaaaaaaaaaa"*5) # dummy file path
+    if curLevel == 0: # we are already at top level, just use that
+        return 0
+    # go curLevel-1, curLevel-2, ..., 0
+    for lowerLevel in range(max(0, curLevel-1), -1, -1):
+        for cluster, jsonData in encodeLevels(facetI, output, lowerLevel, curLevel, fileMap=dummyFileMap):
+            if len(jsonData) > maxSizePerFile:
+                # we went too far, use previous one
+                return min(curLevel, lowerLevel+1)
+    # we can encode everything, use 0
+    return 0
+
+def storeConversationCounts(output: OpenClioResults):
+    for rootClusters in output.rootClusters:
+        if not rootClusters is None:
+            def getAndStoreNumConversations(cluster: ConversationCluster) -> int:
+                if cluster.children is None:
+                    if cluster.filteredIndices is not None:
+                        numConversations = len(cluster.filteredIndices)
+                else:
+                    numConversations = sum([getAndStoreNumConversations(child) for child in cluster.children])
+                cluster.numConversations = numConversations
+                return numConversations
+            [getAndStoreNumConversations(cluster) for cluster in rootClusters]
+                
+
+def portOldInstances(output: OpenClioResults):
+    def portCluster(cluster: ConversationCluster):
+        children = [portCluster(child) for child in cluster.children] if cluster.children is not None else None
+        return ConversationCluster(name=cluster.name, summary=cluster.summary, facet=None, indices=cluster.indices, parent=None, children=children)
+    def portRecursively(rootClusters: List[Optional[List[ConversationCluster]]]):
+        for roots in rootClusters:
+            if not roots is None:
+                yield [portCluster(cluster) for cluster in roots]
+            else:
+                yield None
+    output.rootClusters = list(portRecursively(output.rootClusters))
+    return output
+
+def filterToEnglish(conversation, conversationFacetData):
+    for facetValue in conversationFacetData.facetValues:
+        if facetValue.facet.name == "Language":
+            if facetValue.value.lower().strip() == "english": # this misses stuff like "90's english" but that's ok
+                return True
+    return False
+
+# aim for 10MB or smaller files, and filter to only english ones
+# clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)
+
+def convertOutputToJsonChunks(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]):
+    
+    # store these for data analysis uses
+    for facetI, facet in enumerate(output.facets):
+        if shouldMakeFacetClusters(facet):
+            numLevels = getNumLevels(output, facetI)
+            for conv in getAllClustersAtLevel(facetI, output=output, level=numLevels-1):
+                conv.filteredIndices = [convIndex for convIndex in conv.indices if conversationFilter(output.conversations[convIndex], output.conversationsFacets[convIndex])]
+
+    storeConversationCounts(output)
+
+    rootJson = []
+    for facetI, facet in enumerate(output.facets):
+        print(f"facet {facet.name}")
+        facetJson = {
+            "name": facet.name,
+            "question": facet.question,
+            "prefill": facet.prefill,
+            "summaryCriteria": "" if facet.summaryCriteria is None else facet.summaryCriteria,
+            "numeric": [] if facet.numeric is None else list(facet.numeric)
+        }
+        if shouldMakeFacetClusters(facet):
+            facetTargetDir = Path(targetDir) / facet.name
+            facetTargetDir.mkdir(parents=True, exist_ok=True)
+
+            globalInd = 0
+            rootItems = []
+
+            curLevel = numLevels-1
+            fileMap = {}
+            while curLevel >= 0:
+                lowerLevel = findLowestLevelThatKeepsSizeLessThanMaxSize(facetI=facetI, output=output, curLevel=curLevel, maxSizePerFile=maxSizePerFile)
+                print(f"Level {lowerLevel} to {curLevel}")
+                facetTargetDirLevels = facetTargetDir / f"levels{lowerLevel}{curLevel}"
+                facetTargetDirLevels.mkdir(parents=True, exist_ok=True)
+                for cluster, jsonData in encodeLevels(facetI=facetI, output=output, lowerLevelInclusive=lowerLevel, highestLevelInclusive=curLevel, fileMap=fileMap):
+                    outputPath = facetTargetDirLevels / f"data{globalInd}.json"
+                    with open(outputPath, "w") as f:
+                        f.write(jsonData)
+                    htmlPath = rootHtmlPath + "/" + str(outputPath)
+                    fileMap[cluster] = htmlPath
+                    if lowerLevel == 0:
+                        rootItems.append({"path": htmlPath, "numConvs": cluster.numConversations})
+                    globalInd += 1
+                curLevel = lowerLevel - 1
+            rootJson.append({"facet": facetJson, "hierarchy": rootItems})
+    with open(targetDir + "/rootObjects.json", "w") as f:
+        json.dump(rootJson, f)
+    return rootJson
+
+            
+
+
 
 # conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
 # conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbeddings=conversationsEmbeddingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
@@ -368,6 +437,8 @@ def printHierarchyHelper(
 def printHierarchy(parents: List[ConversationCluster]):
     resLines = printHierarchyHelper(parents, indent="")
     print("\n".join(resLines))
+    with open("hierarchy.txt", "w") as f:
+        f.write("\n".join(resLines))
 
 '''
 Embed map(valueMap, facetValues) into 
@@ -704,9 +775,15 @@ def getHierarchy(
                 return renamingPrompts
             
             def processOutputFunc(parent: ConversationCluster, renamePrompts: List[str], renamingOutputs: List[str]):
-                summary, name = getMedoidSummaryAndName(renamingOutputs, embeddingModel)
-                parent.summary = summary
-                parent.name = name
+                # if only have one child, just copy name and summary, no need to drift
+                if len(parent.children) == 1:
+                    child = parent.children[0]
+                    parent.name = child.name
+                    parent.summary = child.summary
+                else:
+                    summary, name = getMedoidSummaryAndName(renamingOutputs, embeddingModel)
+                    parent.summary = summary
+                    parent.name = name
         
             runBatched(list(parents.values()),
                 getInputs=getInputsFunc,
