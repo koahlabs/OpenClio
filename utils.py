@@ -1,5 +1,14 @@
 import datetime
 import pytz
+import vllm
+from typing import Tuple, List, Dict
+from sentence_transformers import SentenceTransformer
+import os
+import pandas as pd
+import itertools
+from collections import deque
+
+## Stuff for keypoller support on windows
 isWindows = False
 try:
     from win32api import STD_INPUT_HANDLE
@@ -10,6 +19,8 @@ except ImportError as e:
     import select
     import termios
 
+# this is needed because vllm doesn't like being interrupted with ctrl-c
+# so I listen for the c key and if it's sent then we can interrupt
 class KeyPoller():
     def __init__(self, noCancel=False):
         self.noCancel = noCancel
@@ -74,14 +85,33 @@ class KeyPoller():
             if not dr == []:
                 return sys.stdin.read(1)
             return None
-        
-def timestampMillis():
+
+def getModels() -> Tuple[vllm.LLM, SentenceTransformer]:
+    """Get the default models we use (llm, embeddingModel) for running clio"""
+    #model_str = "Qwen/Qwen2.5-7B-Instruct"
+    model_str = "Qwen/Qwen3-8B"
+    llm = vllm.LLM(model=model_str)
+    embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
+    return llm, embeddingModel
+
+def filterDataToEnglish(data : List[List[Dict[str,str]]]) -> List[List[Dict[str,str]]]:
+    return [conversation for conversation in data if all([turn['language'] == 'English' for turn in conversation])]
+
+def getData():
+    d = []
+    for l in os.listdir("chonkers"):
+        if l.startswith("train-000"):
+            print(l)
+            subset = pd.read_parquet("chonkers/" + l, engine="pyarrow")
+            d += [subset.iloc[i].conversation for i in range(len(subset))]
+    return filterDataToEnglish(d)
+
+def timestampMillis() -> int:
+    """Get current timestamp in millis"""
     return int((datetime.datetime.utcnow() - datetime.datetime(1970, 1, 1)).total_seconds() * 1000) 
 
-'''
-Datetime after we add seconds_to_add seconds, in local time
-'''
-def getFutureDatetime(seconds_to_add):
+def getFutureDatetime(seconds_to_add : float) -> datetime.datetime:
+    """Datetime after we add seconds_to_add seconds, in local time"""
     # Get current datetime (adjust this to yours if you want)
     current_datetime = datetime.datetime.now(pytz.timezone('US/Pacific'))
     
@@ -90,10 +120,8 @@ def getFutureDatetime(seconds_to_add):
     
     return future_datetime
 
-'''
-Calculate (days, hours, minutes, seconds)
-'''
-def convertSeconds(seconds):
+def convertSeconds(seconds) -> Tuple[int, int, int, int]:
+    """Calculate (days, hours, minutes, seconds)"""
     days, remainder = divmod(seconds, 86400)  # 86400 seconds in a day
     hours, remainder = divmod(remainder, 3600)  # 3600 seconds in an hour
     minutes, seconds = divmod(remainder, 60)  # 60 seconds in a minute
@@ -101,10 +129,8 @@ def convertSeconds(seconds):
     # Return as a tuple (days, hours, minutes, seconds)
     return int(days), int(hours), int(minutes), int(seconds)
 
-'''
-Display seconds as days, hours, minutes, seconds
-'''
-def secondsToDisplayStr(seconds):
+def secondsToDisplayStr(seconds : float) -> str:
+    """Display seconds as days, hours, minutes, seconds"""
     day, hour, mins, sec = convertSeconds(seconds)
     dispStr = ""
     if day > 0:
@@ -118,14 +144,14 @@ def secondsToDisplayStr(seconds):
     return dispStr
 
 
-'''
-Flattens an array into a 1D array
-For example
-# [[[2, 3], [4, [3, 4], 5, 6], 2, 3], [2, 4], [3], 3]
-# is flattened into
-# [2, 3, 4, 3, 4, 5, 6, 2, 3, 2, 4, 3, 3]
-'''
 def flatten(nestedLists):
+    """"
+    Flattens an array into a 1D array
+    For example
+    # [[[2, 3], [4, [3, 4], 5, 6], 2, 3], [2, 4], [3], 3]
+    # is flattened into
+    # [2, 3, 4, 3, 4, 5, 6, 2, 3, 2, 4, 3, 3]
+    """
     result = []
     if type(nestedLists) is list:
         for n in nestedLists:
@@ -134,18 +160,19 @@ def flatten(nestedLists):
         result.append(nestedLists)
     return result
 
-'''
-Once you do
-originalUnflattened = [[[2, 3], [4, [3, 4], 5, 6], 2, 3], [2, 4], [3], 3]
-flattened = flatten(originalUnflattened)
-# [2, 3, 4, 3, 4, 5, 6, 2, 3, 2, 4, 3, 3]
-say you have another list of len(flattened)
-transformed = [3, 4, 5, 4, 5, 6, 7, 3, 4, 3, 5, 4, 4]
-this can "unflatten" that list back into the same shape as originalUnflattened
-unflattenedTransformed = unflatten(transformed, originalUnflattened)
-# [[[3, 4], [5, [4, 5], 6, 7], 3, 4], [3, 5], [4], 4]
-'''
+
 def unflatten(unflattened, nestedLists):
+    """
+    Once you do
+    originalUnflattened = [[[2, 3], [4, [3, 4], 5, 6], 2, 3], [2, 4], [3], 3]
+    flattened = flatten(originalUnflattened)
+    # [2, 3, 4, 3, 4, 5, 6, 2, 3, 2, 4, 3, 3]
+    say you have another list of len(flattened)
+    transformed = [3, 4, 5, 4, 5, 6, 7, 3, 4, 3, 5, 4, 4]
+    this can "unflatten" that list back into the same shape as originalUnflattened
+    unflattenedTransformed = unflatten(transformed, originalUnflattened)
+    # [[[3, 4], [5, [4, 5], 6, 7], 3, 4], [3, 5], [4], 4]
+    """
     result, endIndex = unflattenHelper(unflattened, nestedLists, 0)
     return result
 
@@ -160,8 +187,89 @@ def unflattenHelper(unflattened, nestedLists, startIndex):
         startIndex += 1
     return result, startIndex
 
-
 def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+    return list(runBatchedIterator(
+        inputs=inputs,
+        n=len(inputs),
+        getInputs=getInputs,
+        processBatch=processBatch,
+        processOutput=processOutput,
+        batchSize=batchSize,
+        noCancel=noCancel,
+    ))
+
+def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+    def getInputsIterator(inputs):
+        for input in inputs:
+            yield getInputs(input)
+            
+    def getFlattenedIterator(inputsIter):
+        for unflattenedInputs in inputsIter:
+            yield flatten(unflattenedInputs)
+            
+    def getFlattenedOutputsIterator(flattenedIter, runOnBatchFunc):
+        curBatch = deque() # this gives us o(1) insertions and removals
+        batchEnd = 0
+        for flattened in flattenedIter:
+            curBatch.extend(flattened)
+            while len(curBatch) >= batchSize:
+                outputs = processBatch([curBatch.popleft() for _ in range(batchSize)])
+                batchEnd += batchSize
+                runOnBatchFunc(batchEnd)
+                yield outputs
+        if len(curBatch) > 0:
+            outputs = processBatch(list(curBatch))
+            batchEnd += len(curBatch)
+            runOnBatchFunc(batchEnd)
+            yield outputs
+
+    def onDemandBatchedIter(inputs, runOnBatchFunc):
+        nonlocal n
+        # tee makes two iterators that share the same source, so we only call getInputs once for each item
+        # it's nice that it only stores past stuff until consumed by both (plus a small buffer, depending on implementation)
+        inputsIter1, inputsIter2 = itertools.tee(getInputsIterator(inputs))
+        flattenedIter1, flattenedIter2 = itertools.tee(getFlattenedIterator(inputsIter1))
+        flattenedOutputsIter = getFlattenedOutputsIterator(flattenedIter1, runOnBatchFunc)
+
+        curOutputs = deque() # this gives us o(1) insertions and removals
+        for i, (input, inputUnflattened, inputFlattened) in enumerate(zip(inputs, inputsIter2, flattenedIter2)):
+            if i == 0: n *= len(inputFlattened) # improve estimate of n
+            # fetch outputs until we have as many as we sent in inputs
+            while len(curOutputs) < len(inputFlattened):
+                curOutputs.extend(next(flattenedOutputsIter))
+            # grab that many and unflatten them (make them the shape of inputUnflattened)
+            outputsUnflattened = unflatten([curOutputs.popleft() for _ in range(len(inputFlattened))], inputUnflattened)
+            # process the outputs and return them
+            results = processOutput(input, inputUnflattened, outputsUnflattened)
+            yield results
+
+    startTime = timestampMillis()
+    # we need keypoller because vllm doen't like to be keyboard interrupted
+    with KeyPoller(noCancel) as keypoller:
+        def runOnBatchedFunc(batchEnd):
+            elapsed = timestampMillis() - startTime
+            secondsPerPrompt = elapsed / (float(batchEnd))
+            totalTime = elapsed *  n / float(batchEnd)
+            timeLeft = totalTime - elapsed
+            dispStr = secondsToDisplayStr(timeLeft/1000.0)
+            doneDateTimeStr = getFutureDatetime(timeLeft/1000.0).strftime('%I:%M:%S %p')
+            print(batchEnd, "/", n, f"{secondsPerPrompt} millis per item {dispStr}done at {doneDateTimeStr}")
+            keys = keypoller.poll()
+            if not keys is None:
+                print(keys)
+                if str(keys) == "c":
+                    print("got c")
+                    raise ValueError("stopped")   
+        
+        for output in onDemandBatchedIter(inputs, runOnBatchedFunc):
+            yield output
+                
+'''
+def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+    """
+    Helper method to run batched inference while keeping nested structure (if desired)
+    See openclio.py for various examples of usage
+    """
     unflattenedInputs = [getInputs(input) for input in inputs]
     flattenedInputs = flatten(unflattenedInputs)
     def batchedFunc(startBatch, endBatch):
@@ -196,3 +304,25 @@ def runBatchedSimple(callFunc, n, batchSize, noCancel=False):
                     print("got c")
                     raise ValueError("stopped")
     return outputs
+'''
+
+
+
+def getClosestNames(
+    names: List[str],
+    embeddingModel: SentenceTransformer
+    ) -> Tuple[int, int, float]:
+    """
+    Get the pair of names that have closest embeddings when using embeddingModel
+    Returns (pairI, pairJ, pairCosineSimilarity)
+    """
+    embedded = embeddingModel.encode(names, show_progress_bar=False)
+    sims = cosine_similarity(embedded)
+    # middle is 0, make it not
+    np.fill_diagonal(sims, -1)
+    i, j = np.unravel_index(np.argmax(sims), sims.shape)
+    print(sims[i,j])
+    print(names[i])
+    print(names[j])
+    return i,j, sims[i,j]
+

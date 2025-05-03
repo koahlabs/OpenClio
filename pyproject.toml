@@ -24,6 +24,9 @@ dependencies = [
     "scipy",
     "torch",
     "cloudpickle",
+    "setuptools",
+    "pyarrow",
+    "faiss-cpu",
 ]
 dynamic = ["version"]
 

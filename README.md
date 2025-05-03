@@ -3,3 +3,6 @@ Open source version of Anthropic's Clio: A system for privacy-preserving insight
 
 How do I use?
 
+```
+pip install git+https://github.com/tangentlabs/django-oscar-paypal.git
+```

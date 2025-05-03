@@ -1,3 +1,4 @@
+from typing import List, Dict
 from collections import defaultdict
 global cachedTokenizer
 cachedTokenizer = None
@@ -17,7 +18,7 @@ def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict)
         cachedTokenizer = tokenizer
     if not funcName in replacementCache:
         messages = getMessagesFunc()
-        inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
+        inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True, enable_thinking=False)
         prompt = tokenizer.decode(inputs['input_ids'][0])
         replacementCache[funcName] = prompt
     prompt = replacementCache[funcName]
@@ -26,8 +27,80 @@ def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict)
     return prompt
         
 
+def summarizeFacetPrompt(tokenizer, facet, data, cfg, dataToStr):
+    return doCachedReplacements(
+        funcName="simpleFacetPrompt",
+        tokenizer=tokenizer,
+        getMessagesFunc=lambda: [
+            {
+                "role": "user",
+                "content": """Please summarize the provided data in a single sentence:
 
-def getFacetPrompt(tokenizer, conversation, question, prefill):
+<data>
+{dataREPLACE}
+</data>
+
+Put your answer in this format:
+
+<summary>
+[A single sentence summary of the data]
+</summary>"""
+            },
+            {
+                "role": "assistant",
+                "content": "I understand, I will provide a one sentence summary of the data.\n\n<summary>"
+            }
+        ],
+        replacementsDict={
+            "data": dataToStr(data)
+        }
+    )
+
+
+def conversationToString(conversation: List[Dict[str, str]], tokenizer, maxTokens: int) -> str:
+    """
+    Converts a conversation like
+    [
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hi:3"}
+    ]
+    into a corresponding string
+    User:
+    Hi there
+    Assistant:
+    Hi:3
+    And truncates (rounding down to conversation boundaries) to maxTokens
+    """
+    fullConversation = "\n".join([f"{turn['role']}:\n{turn['content']}" for turn in conversation])
+    if len(fullConversation) < maxTokens * 1.5: # lower bound estimate to avoid cost of running tokenizer
+        return fullConversation 
+    if len(tokenizer.encode(fullConversation)) < maxTokens:
+        return fullConversation
+    conversationPieces = []
+    turnsToAdd = []
+    for turn in conversation:
+        turnsToAdd = turnsToAdd + [f"{turn['role']}:\n{turn['content']}"]
+        # truncate on "after assistant" boundaries so we don't end with a user message and confuse the model
+        if turn['role'] == 'assistant':
+            conversationSoFar = conversationPieces + turnsToAdd
+            conversationSoFarStr = "\n".join(conversationSoFar)
+            conversationSoFarTokens = tokenizer.encode(conversationSoFarStr)
+            # if adding this (user, assistant) turn puts us over the limit:
+            if len(conversationSoFarTokens) > maxTokens:
+                if len(conversationPieces) == 0: # if this is the first two turns, truncate
+                    return tokenizer.decode(conversationSoFarTokens[:maxTokens])
+                else: # otherwise, just return turns before this
+                    return "\n".join(conversationPieces)
+            # otherwise, continue adding things
+            else:
+                conversationPieces = conversationSoFar
+                turnsToAdd = []
+    # if we somehow ended with a user turn, ignore it, there was a bug
+    return "\n".join(conversationPieces)
+
+
+def getFacetPrompt(tokenizer, facet, conversation, cfg):
+    conversationStr = conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
     return doCachedReplacements(
         funcName="getFacetPrompt",
         tokenizer=tokenizer,
@@ -61,9 +134,9 @@ What is your answer to the question <question> {questionREPLACE} </question> abo
                 "content": "Sure, the privacy-preserving answer to the question about the preceding conversation is: <answer> {prefillREPLACE}"
             }],
         replacementsDict = {
-            "conversation": conversation,
-            "question": question,
-            "prefill": prefill
+            "conversation": conversationStr,
+            "question": facet.question,
+            "prefill": facet.prefill
         },
     )
     

@@ -17,5 +17,5 @@ setuptools.setup(
     ],
     packages = setuptools.find_packages(),
     python_requires = ">=3.6",
-    install_requires = ["dataclasses", "vllm","pandas", "sentence_transformers", "numpy", "scikit-learn", "scipy", "torch", "cloudpickle"]
+    install_requires = ["dataclasses", "vllm","pandas", "sentence_transformers", "numpy", "scikit-learn", "scipy", "torch", "cloudpickle", "setuptools", "pyarrow", "faiss-cpu"]
 )
