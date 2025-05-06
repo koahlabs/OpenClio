@@ -21,8 +21,7 @@ import random
 import cloudpickle
 from pathlib import Path
 
-import .prompts as prompts
-from .prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt, getDeduplicateClusterNamesPrompt, getAssignToHighLevelClusterPrompt, getRenamingHigherLevelClusterPrompt
+from .prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt, getDeduplicateClusterNamesPrompt, getAssignToHighLevelClusterPrompt, getRenamingHigherLevelClusterPrompt, getSummarizeFacetPrompt
 from .utils import flatten, unflatten, runBatched, dedup
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults
 from .faissKMeans import FaissKMeans
@@ -79,20 +78,14 @@ genericSummaryFacets = [
     Facet(
         name="Summary",
         getFacetPrompt=functools.partial(
-            prompts.summarizeFacetPrompt,
+            getSummarizeFacetPrompt,
             dataToStr=lambda data: str(data)
         ),
         summaryCriteria="The cluster name should be a clear single sentence that accurately captures the examples."
     )
 ]
 
-    
 
-
-# conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
-# conversationsFacetsSmol, conversationsEmbeddingsSmol, kMeansSmol, baseClustersSmol, higherCategoriesSmol, dedupedCategoriesSmol, parentsSmol = clio.runClio(clio.facets, llm, embed, data[0:1000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacetsSmol, conversationsEmbeddings=conversationsEmbeddingsSmol, kMeans=kMeansSmol, baseClusters=baseClustersSmol)
-# conversationsFacets, conversationsEmbeddings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000)
-# conversationsFacets, conversationsEmbeddings, kMeans, baseClusters, higherCategories, dedupedCategories, parents = clio.runClio(clio.facets, llm, embed, data[0:10000], llmBatchSize=1000, embedBatchSize=1000, numberOfBaseClusters=1000, nPointsToSample=10, nLLMSamplesPerCluster=5, nClustersOutside=5, nCategorizeSamples=5, desiredNames=5, seed=27, max_tokens=1000, conversationsFacets=conversationsFacets, conversationsEmbeddings=conversationsEmbeddings, kMeans=kMeans, baseClusters=baseClusters)
 def runClio(facets: List[Facet], 
             llm: vllm.LLM,
             embeddingModel: SentenceTransformer,
@@ -222,19 +215,23 @@ def runClio(facets: List[Facet],
             dependencyModified=dependencyModified
         )
     
-    res, dependencyModified = runIfNotExist("results.pkl", lambda:
-        OpenClioResults(
-            facets=facets,
-            facetValues=facetValues,
-            facetValuesEmbeddings=facetValuesEmbeddings,
-            baseKMeans=baseKMeans,
-            baseClusters=baseClusters,
-            rootClusters=rootClusters,
-            conversations=conversations
-        ),
-        dependencyModified=dependencyModified
-    )
+    print("Saving results")
+    res, dependencyModified =
+        runIfNotExist("results.pkl", lambda:
+            OpenClioResults(
+                facets=facets,
+                facetValues=facetValues,
+                facetValuesEmbeddings=facetValuesEmbeddings,
+                baseKMeans=baseKMeans,
+                baseClusters=baseClusters,
+                rootClusters=rootClusters,
+                conversations=conversations,
+                cfg=cfg
+            ),
+            dependencyModified=dependencyModified
+        )
 
+    print("Outputting to webpage")
     htmlOutputPath = os.path.join(outputDirectory, htmlRoot)
     # clear old outputs
     if os.path.exists(htmlOutputPath):
@@ -244,13 +241,10 @@ def runClio(facets: List[Facet],
         output=output,
         rootHtmlPath=htmlRoot,
         targetDir=htmlOutputPath,
-        maxSizePerFile=cfg.maxSizePerFile,
+        maxSizePerFile=cfg.htmlMaxSizePerFile,
         conversationFilter=cfg.htmlConversationFilterFunc,
         dataToJson=cfg.htmlDataToJsonFunc,
     )
-
-
-    return res
 
 def getNeighborhoods(
     facetStrValues: List[str],

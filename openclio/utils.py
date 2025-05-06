@@ -96,11 +96,13 @@ def getModels() -> Tuple[vllm.LLM, SentenceTransformer]:
     return llm, embeddingModel
 
 def filterDataToEnglish(data : List[List[Dict[str,str]]]) -> List[List[Dict[str,str]]]:
+    """Simple filter function that restricts us to only data that has english on all turns"""
     return [conversation for conversation in data if all([turn['language'] == 'English' for turn in conversation])]
 
 def dedup(data: List[List[Dict[str, str]]],
         dedupKeyFunc: Callable[[Any], Any],
         batchSize: int):
+    """Deduplicates the given data, using dedupKeyFunc as item keys, processing batchSize elements at a time"""
         
     existingConvs = set()
     dedupedConvs = []
@@ -118,6 +120,7 @@ def dedup(data: List[List[Dict[str, str]]],
     return dedupedConvs
 
 def getData():
+    """Extracts the data from chonkers/... into the needed form"""
     d = []
     for l in os.listdir("chonkers"):
         if l.startswith("train-000"):
@@ -208,6 +211,30 @@ def unflattenHelper(unflattened, nestedLists, startIndex):
     return result, startIndex
 
 def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+    """
+    Utility function that's useful to do batched processing on structured data.
+
+    inputs should be a list of the data you want to process
+
+    It does the following:
+    1. Convert each input into (arbitrairly nested, as much as you'd like) arrays using getInputs(input)
+    2. Flattens the results of all of those
+    3. Passes chunks of size batchSize into processBatch(flattenedBatch)
+        Each processBatch call should return as many values as it was given as input.
+        The very final call may be smaller than batchSize if things don't evenly divide
+    4. Unflattens them back to original structure provided via getInputs, then
+    5. Calls processOutput(input, outputFromGetInputs, resultsFromProcessBatch) for each input
+        resultsFromProcessBatch will have same nesting structure as outputFromGetInputs
+        (so if getInputs returned [["hi"], "there"] then 
+        outputFromGetInputs will be [["hi"], "there"] and
+        resultsFromProcessBatch will look like [[result1], result2])
+    6. Returns an array that has the outputs of processOutput (one entry per input)
+
+    That's the process, but it actually does this in a "streaming" fashion so it only grabs stuff as needed.
+
+    However it'll still return a list of the outputs, if you prefer to iterate through the outputs and not keep them all in memory,
+    you can use runBatchedIterator instead
+    """
     return list(runBatchedIterator(
         inputs=inputs,
         n=len(inputs),
@@ -219,6 +246,11 @@ def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCanc
     ))
 
 def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+    """
+    See documentation for runBatched, the main difference is that this will "stream" the outputs as needed instead of putting them all in memory in a big array before returning.
+    Also, inputs can be an enumerator if desired.
+    Because we no longer know the length of inputs, we require the n parameter which is the length of inputs.
+    """
     def getInputsIterator(inputs):
         for input in inputs:
             yield getInputs(input)
@@ -284,49 +316,6 @@ def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchS
         for output in onDemandBatchedIter(inputs, runOnBatchedFunc):
             yield output
                 
-'''
-def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCancel=False):
-    """
-    Helper method to run batched inference while keeping nested structure (if desired)
-    See openclio.py for various examples of usage
-    """
-    unflattenedInputs = [getInputs(input) for input in inputs]
-    flattenedInputs = flatten(unflattenedInputs)
-    def batchedFunc(startBatch, endBatch):
-        batchInputs = flattenedInputs[startBatch:endBatch]
-        return processBatch(batchInputs)
-    flattenedOutputs = runBatchedSimple(batchedFunc, len(flattenedInputs), batchSize, noCancel=noCancel)
-    unflattenedOutputs = unflatten(flattenedOutputs, unflattenedInputs)
-    results = []
-    for input, modelInputs, output in zip(inputs, unflattenedInputs, unflattenedOutputs):
-        results.append(processOutput(input, modelInputs, output))
-    return results
-
-def runBatchedSimple(callFunc, n, batchSize, noCancel=False):
-    outputs = []
-    startTime = timestampMillis()
-    # we need keypoller because vllm doen't like to be keyboard interrupted
-    with KeyPoller(noCancel) as keypoller:
-        for batchStart in range(0, n, batchSize):
-            batchEnd = min(n, batchStart+batchSize)
-            outputs += callFunc(batchStart, batchEnd)
-            elapsed = timestampMillis() - startTime
-            secondsPerPrompt = elapsed / (float(batchEnd))
-            totalTime = elapsed *  n / float(batchEnd)
-            timeLeft = totalTime - elapsed
-            dispStr = secondsToDisplayStr(timeLeft/1000.0)
-            doneDateTimeStr = getFutureDatetime(timeLeft/1000.0).strftime('%I:%M:%S %p')
-            print(batchEnd, "/", n, f"{secondsPerPrompt} millis per item {dispStr}done at {doneDateTimeStr}")
-            keys = keypoller.poll()
-            if not keys is None:
-                print(keys)
-                if str(keys) == "c":
-                    print("got c")
-                    raise ValueError("stopped")
-    return outputs
-'''
-
-
 
 def getClosestNames(
     names: List[str],
@@ -354,6 +343,10 @@ def getDuplicateFacetValues(
         llm : vllm.LLM,
         maxConversationTokens: int
     ):
+    """
+    Utility method if u want to find [(facetValue, conversationIndicesOfFacetValue, allDuplicateValues)]
+    Helpful for debugging when there's too many duplicates
+    """
     counts = defaultdict(lambda: [])
     uniques = defaultdict(lambda: set())
     tokenizer = llm.get_tokenizer()
