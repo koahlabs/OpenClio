@@ -6,3 +6,6 @@ How do I use?
 ```
 pip install git+https://github.com/tangentlabs/django-oscar-paypal.git
 ```
+
+```
+import openclio as clio

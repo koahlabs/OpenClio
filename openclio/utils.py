@@ -1,12 +1,13 @@
 import datetime
 import pytz
 import vllm
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Callable, Any
 from sentence_transformers import SentenceTransformer
 import os
 import pandas as pd
+from prompts import conversationToString
 import itertools
-from collections import deque
+from collections import deque, defaultdict
 
 ## Stuff for keypoller support on windows
 isWindows = False
@@ -96,6 +97,25 @@ def getModels() -> Tuple[vllm.LLM, SentenceTransformer]:
 
 def filterDataToEnglish(data : List[List[Dict[str,str]]]) -> List[List[Dict[str,str]]]:
     return [conversation for conversation in data if all([turn['language'] == 'English' for turn in conversation])]
+
+def dedup(data: List[List[Dict[str, str]]],
+        dedupKeyFunc: Callable[[Any], Any],
+        batchSize: int):
+        
+    existingConvs = set()
+    dedupedConvs = []
+    def processOutputFunc(dataI, s, dataKey):
+        if not dataKey in existingConvs:
+            dedupedConvs.append(data[dataI])
+            existingConvs.add(dataKey)
+    
+    runBatched(list(range(len(data))),
+        getInputs=lambda dataI: dedupKeyFunc(data[dataI]),
+        processBatch=lambda dataKeys: dataKeys,
+        processOutput=processOutputFunc,
+        batchSize=batchSize)
+    
+    return dedupedConvs
 
 def getData():
     d = []
@@ -325,4 +345,27 @@ def getClosestNames(
     print(names[i])
     print(names[j])
     return i,j, sims[i,j]
+
+
+def getDuplicateFacetValues(
+        facetValues: List['ConversationFacetData'],
+        facetName: str,
+        conversations: List[Dict[str, str]],
+        llm : vllm.LLM,
+        maxConversationTokens: int
+    ):
+    counts = defaultdict(lambda: [])
+    uniques = defaultdict(lambda: set())
+    tokenizer = llm.get_tokenizer()
+    for conversationI, conversationFacetValues in enumerate(facetValues):
+        if conversationI % 1000 == 0: print(conversationI)
+        for facetValue in conversationFacetValues.facetValues:
+            if facetValue.facet.name == facetName:
+                counts[facetValue.value].append(conversationI)
+    
+    dups = sorted([(k,vs) for (k,vs) in counts.items() if len(vs) > 1], key=lambda x: -len(x[1]))
+    for k,vs in dups:
+        for conversationI in vs:
+            uniques[k].add(conversationToString(conversations[conversationI], tokenizer=tokenizer, maxTokens=maxConversationTokens))
+    return [(k,vs,uniques[k]) for (k,vs) in dups]
 

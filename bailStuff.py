@@ -7,6 +7,10 @@ import vllm
 import prompts
 import functools
 from openclio import Facet
+import cloudpickle
+import openclio as clio
+import writeOutput
+from collections import defaultdict
 
 bailSymbol = "🔄"
 continueSymbol = "🟢"
@@ -165,8 +169,7 @@ journalsFacets = [
 # clio outputs is in chonkers/clioonjournalsqwen25
 # journals is in chonkers/journalsonbailed (though you may need to run extractJournalEntries) or just cliooutput.conversations
 # bailPrs is in chonkers/qwen25bailall
-def getJournalToJson(tokenizer, data, journals, bailPrs):
-    
+def getJournalTurnPromptMap(tokenizer, data, journals, bailPrs):
     jsonMap = {}
     for i, (conversationIndex, turnPromptc, bailPr, continuePr, turnJournal) in enumerate(journals):
         print(i)
@@ -183,5 +186,76 @@ def getJournalToJson(tokenizer, data, journals, bailPrs):
             if ind == index:
                 messages.append({"role": "assistant", "content": f"BAILHERE\n{turnJournal}"})
         jsonMap[turnPromptc] = messages
+    return jsonMap
+
+def getJournalToJson(tokenizer, data, journals, bailPrs):
+    jsonMap = getJournalTurnPromptMap(tokenizer=tokenizer, data=data, journals=journals, bailPrs=bailPrs)
     print("Finished json map")
     return lambda journal: jsonMap[journal[1]]
+
+def writeConversationsWithJournals(data, llm, embeddingModel, maxConversationTokens: int = 8000):
+    # code to make clioqwenbailjournalsv2 (have regular clio ran on conversations, but include bail journals and bail prs in outputs)
+    print("Loading journals")
+    with open("chonkers/journalsonbailed", "rb") as f:
+        journals = extractJournalEntries(cloudpickle.load(f))[0]
+
+    with open("chonkers/qwen25bailall", "rb") as f:
+        bailPrs = cloudpickle.load(f)
+    
+    print("Making conversation subset")
+    tokenizer = llm.get_tokenizer()
+    conversationsSubset = []
+    subsetIndices = set()
+    journalsOfConversations = defaultdict(lambda: {})
+    for conversationIndex, turnPromptc, bailPr, continuePr, turnJournal in journals:
+        if not conversationIndex in subsetIndices:
+            subsetIndices.add(conversationIndex)
+            conversationsSubset.append((conversationIndex, data[conversationIndex]))
+        journalsOfConversations[conversationIndex][turnPromptc] = turnJournal
+    # sort by conversation index
+    conversationsSubset.sort(key=lambda x: x[0])
+
+
+    # run clio
+    subsetClio = clio.runClio(
+        conversations=conversationsSubset,
+        llm=llm,
+        embeddingModel=embeddingModel,
+        facets=clio.mainFacets,
+        maxConversationTokens=maxConversationTokens,
+        savePrefix="conversationsWithJournals",
+        # since we store (originalConvI, conversationData), just return conversationData
+        dedupKeyFunc=lambda conversation: prompts.conversationToString(conversation[1], tokenizer=tokenizer, maxTokens=maxConversationTokens),
+        getConversationFunc=lambda conversationTuple: conversationTuple[1],
+    )
+
+    
+    # create the json data that sticks in the bailprs and bail journals
+    print("Generating output json with bail prs and journals")
+    jsonMap = {}
+    for conversationIndex, conversationData in conversationsSubset:
+        conversation = [{"role": turn['role'], "content": turn['content']} for turn in data[conversationIndex]]
+        turnPrompts = getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex])
+        bailJournals = journalsOfConversations[conversationIndex]
+        resultJson = []
+        for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            resultJson.extend(conversationPieces)
+            resultJson.append({"role": "pr", "content": f"{bailPr} {continuePr}"})
+            # add bail journal if it exists
+            if turnPrompt in bailJournals:
+                resultJson.append({"role": "bailJournal", "content": f"BAIL\n{bailJournals[turnPrompt]}"})
+        jsonMap[conversationIndex] = resultJson            
+
+    dataToJsonFunc = lambda conversationTuple: jsonMap[conversationTuple[0]]
+
+    print("Writing output")
+    writeOutput.convertOutputToJsonChunks(subsetClio,
+        "/modelwelfare/clioqwenbailjournalsv2",
+        targetDir="chonkers/clioqwenbailjournalsv2",
+        maxSizePerFile=10000000,
+        dataToJson=dataToJsonFunc)
+
+
+
+
+

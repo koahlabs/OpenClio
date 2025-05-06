@@ -3,7 +3,8 @@ import os
 import json
 from collections import defaultdict
 from pathlib import Path
-from openclio import OpenClioResults, ConversationCluster, ConversationFacetData, shouldMakeFacetClusters
+from opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults
+
 # 0 is root/highest level
 def getAllClustersAtLevel(facetI: int, output: OpenClioResults, level: int):
     def getAllClustersAtLevelHelper(cluster: ConversationCluster, targetLevel: int):
@@ -44,7 +45,7 @@ def encodeClusterAsJson(facetI: int, output: OpenClioResults, cluster: Conversat
             # todo: add facet values
             conversations = []
             for conversationI in cluster.filteredIndices:
-                data = output.conversationsFacets[conversationI]
+                data = output.facetValues[conversationI]
                 facetValue = data.facetValues[facetI]
                 conversation = data.conversation
                 conversations.append({
@@ -111,7 +112,7 @@ def filterToEnglish(conversation, conversationFacetData):
 # aim for 10MB or smaller files, and filter to only english ones
 # clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)
 
-def convertOutputToJsonChunks(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None):
+def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None):
     
     if dataToJson is None:
         dataToJson = lambda conversation: [{'role': turn['role'], "content": turn['content']} for turn in conversation]
@@ -123,7 +124,7 @@ def convertOutputToJsonChunks(output: OpenClioResults, rootHtmlPath: str, target
         if shouldMakeFacetClusters(facet):
             numLevels = getNumLevels(output, facetI)
             for conv in getAllClustersAtLevel(facetI, output=output, level=numLevels-1):
-                conv.filteredIndices = [convIndex for convIndex in conv.indices if conversationFilter(output.conversations[convIndex], output.conversationsFacets[convIndex])]
+                conv.filteredIndices = [convIndex for convIndex in conv.indices if conversationFilter(output.conversations[convIndex], output.facetValues[convIndex])]
 
     storeConversationCounts(output)
 
@@ -162,7 +163,10 @@ def convertOutputToJsonChunks(output: OpenClioResults, rootHtmlPath: str, target
                     globalInd += 1
                 curLevel = lowerLevel - 1
             rootJson.append({"facet": facetJson, "hierarchy": rootItems})
-    with open(targetDir + "/rootObjects.json", "w") as f:
+    with open(os.path.join(targetDir, "rootObjects.json"), "w") as f:
         json.dump(rootJson, f)
 
+    with open("websiteTemplate.html", "r") as templateF:
+        templateText = templateF.read().replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
+        with open(os.path.join(targetDir, "index.html"), "w") as 
             
