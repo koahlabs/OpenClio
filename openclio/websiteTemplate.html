@@ -74,10 +74,7 @@ const $=(t,a={},...k)=>{
     else if(key==='class') e.className=val;
     else e.setAttribute(key,val);
   }
-  console.log("this is k");
-  console.log(k);
   k.flat().forEach(c=> {
-  console.log(c);
   if (c) {
   
         e.appendChild(typeof c==='string'?document.createTextNode(c):c);
@@ -197,7 +194,7 @@ function handleToggle(e){
     for(const key of [...pathMap.keys()]){
       if(key.startsWith(parentPath+'.')||key===parentPath+'$c') pathMap.delete(key);
     }
-    if(openConvHash && openConvHash.startsWith(`conv!${parentPath}.`)) closeConversation();
+    if(openConvHash && openConvHash.startsWith(`c!${parentPath}.`)) closeConversation();
   }
   updateHash();
 }
@@ -210,7 +207,7 @@ modalWrap.addEventListener('click',e=>{if(e.target===modalWrap)closeConversation
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeConversation();});
 
 function openConversation(obj,pathArr,idx){
-  openConvHash=`conv!${join(pathArr)}!${idx}`;
+  openConvHash=`c!${join(pathArr)}!${idx}`;
   convContent.innerHTML='';
   if(obj.allFacetValues?.length){
     const colors=['#ff7675','#74b9ff','#55efc4','#fdcb6e','#ffeaa7','#a29bfe','#fab1a0','#81ecec'];
@@ -249,11 +246,11 @@ function mdToHtml(t=''){
 function updateHash(){
   if(!modifyHashAllowed)return;
   const open=[...pathMap.entries()].filter(([,d])=>d.open).map(([p])=>p);
-  const loaded=[...loadedPlaceholders].map(p=>'pl!'+p);
+  const loaded=[...loadedPlaceholders].map(p=>'p!'+p);
   if(openConvHash)open.push(openConvHash);
   hashStr = [...open,...loaded].join(',');
   const compressedBase64 = LZUTF8.encodeBase64(LZUTF8.compress(hashStr));
-  window.location.hash = compressedBase64;
+  window.location.hash = encodeURIComponent(compressedBase64);
 }
 let modifyHashAllowed=true;
 
@@ -280,21 +277,21 @@ async function restoreFromHash(){
   modifyHashAllowed=false;
   hashStr = location.hash
   if (hashStr.length > 0) {
-    hashStr = hashStr.substring(1) // remove #
-      try {
-        hashStr = LZUTF8.decompress(LZUTF8.decodeBase64(hashStr), { inputEncoding: "ByteArray", outputEncoding: "String" });
-      }
-      catch {
-        hashStr = ""
-      }
+    try {
+      hashStr = decodeURIComponent(hashStr.substring(1)) // remove #
+      hashStr = LZUTF8.decompress(LZUTF8.decodeBase64(hashStr), { inputEncoding: "ByteArray", outputEncoding: "String" });
+    }
+    catch {
+      hashStr = ""
+    }
   }
 
-  const segs=decodeURIComponent(hashStr.slice(1)).split(',').filter(Boolean);
-  const convSeg=segs.find(s=>s.startsWith('conv!'));
-  const plSegs=segs.filter(s=>s.startsWith('pl!')).map(s=>s.slice(3));
+  const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
+  const convSeg=segs.find(s=>s.startsWith('c!'));
+  const plSegs=segs.filter(s=>s.startsWith('p!')).map(s=>s.slice(3));
 
   const catSegs=[], convListSegs=[];
-  segs.filter(s=>s && !s.startsWith('pl!') && s!==convSeg).forEach(p=>{
+  segs.filter(s=>s && !s.startsWith('p!') && s!==convSeg).forEach(p=>{
     p.endsWith('$c')?convListSegs.push(p):catSegs.push(p);
   });
 
