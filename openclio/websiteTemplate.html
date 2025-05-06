@@ -288,7 +288,7 @@ async function restoreFromHash(){
 
   const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
   const convSeg=segs.find(s=>s.startsWith('c!'));
-  const plSegs=segs.filter(s=>s.startsWith('p!')).map(s=>s.slice(3));
+  const plSegs=segs.filter(s=>s.startsWith('p!')).map(s=>s.slice(2));
 
   const catSegs=[], convListSegs=[];
   segs.filter(s=>s && !s.startsWith('p!') && s!==convSeg).forEach(p=>{
