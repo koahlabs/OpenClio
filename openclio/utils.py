@@ -130,6 +130,7 @@ def getExampleData():
 
 def getFullWildchatData(rootPath):
     """Extracts all wildchat data stored in the given directory (they should look like train-000____.parquet)"""
+    d = []
     for l in os.listdir(rootPath):
         if l.startswith("train-000"):
             print(l)

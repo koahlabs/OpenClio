@@ -1,15 +1,12 @@
 
 from typing import List, Dict, Tuple
 import numpy as np
-from utils import runBatched
 import copy
 import vllm
-import prompts
 import functools
-from openclio import Facet
+from openclio import Facet, runBatched, getSummarizeFacetPrompt, conversationToString, convertOutputToWebpage
 import cloudpickle
 import openclio as clio
-import writeOutput
 from collections import defaultdict
 
 bailSymbol = "🔄"
@@ -39,7 +36,7 @@ def getTurnPrompts(tokenizer, conversation, maxTokens: int = 20000, bailPrs=None
                     "content": "<wellbeing>"
                 }
             ]
-            inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True, enable_thinking=False)
+            inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
             if len(inputs['input_ids'][0]) <= maxTokens:
                 prompt = tokenizer.decode(inputs['input_ids'][0])
                 if bailPrs is None:
@@ -159,7 +156,7 @@ journalsFacets = [
     Facet(
         name="Summary",
         getFacetPrompt=functools.partial(
-            prompts.summarizeFacetPrompt,
+            getSummarizeFacetPrompt,
             dataToStr=lambda data: str(data[-1])
         ),
         summaryCriteria="The cluster name should be a clear single sentence that accurately captures the examples."
@@ -207,35 +204,19 @@ def writeConversationsWithJournals(data, llm, embeddingModel, maxConversationTok
     conversationsSubset = []
     subsetIndices = set()
     journalsOfConversations = defaultdict(lambda: {})
-    for conversationIndex, turnPromptc, bailPr, continuePr, turnJournal in journals:
+    for conversationIndex, turnPrompt, bailPr, continuePr, turnJournal in journals:
         if not conversationIndex in subsetIndices:
             subsetIndices.add(conversationIndex)
             conversationsSubset.append((conversationIndex, data[conversationIndex]))
-        journalsOfConversations[conversationIndex][turnPromptc] = turnJournal
+        journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
     # sort by conversation index
     conversationsSubset.sort(key=lambda x: x[0])
 
-
-    # run clio
-    subsetClio = clio.runClio(
-        conversations=conversationsSubset,
-        llm=llm,
-        embeddingModel=embeddingModel,
-        facets=clio.mainFacets,
-        maxConversationTokens=maxConversationTokens,
-        savePrefix="conversationsWithJournals",
-        # since we store (originalConvI, conversationData), just return conversationData
-        dedupKeyFunc=lambda conversation: prompts.conversationToString(conversation[1], tokenizer=tokenizer, maxTokens=maxConversationTokens),
-        getConversationFunc=lambda conversationTuple: conversationTuple[1],
-    )
-
-    
     # create the json data that sticks in the bailprs and bail journals
     print("Generating output json with bail prs and journals")
     jsonMap = {}
     for conversationIndex, conversationData in conversationsSubset:
         conversation = [{"role": turn['role'], "content": turn['content']} for turn in data[conversationIndex]]
-        turnPrompts = getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex])
         bailJournals = journalsOfConversations[conversationIndex]
         resultJson = []
         for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
@@ -248,12 +229,25 @@ def writeConversationsWithJournals(data, llm, embeddingModel, maxConversationTok
 
     dataToJsonFunc = lambda conversationTuple: jsonMap[conversationTuple[0]]
 
-    print("Writing output")
-    writeOutput.convertOutputToJsonChunks(subsetClio,
-        "/modelwelfare/clioqwenbailjournalsv2",
-        targetDir="chonkers/clioqwenbailjournalsv2",
-        maxSizePerFile=10000000,
-        dataToJson=dataToJsonFunc)
+    # run clio
+    subsetClio = clio.runClio(
+        data=conversationsSubset,
+        llm=llm,
+        embeddingModel=embeddingModel,
+        facets=clio.mainFacets,
+        maxConversationTokens=maxConversationTokens,
+        outputDirectory="chonkers/qwenbailconversationsWithJournals",
+        htmlRoot="/modelwelfare/qwenbailconversationsWithJournals",
+        # since we store (originalConvI, conversationData), just return conversationData
+        dedupKeyFunc=lambda conversation: conversationToString(conversation[1], tokenizer=tokenizer, maxTokens=maxConversationTokens),
+        getConversationFunc=lambda conversationTuple: conversationTuple[1],
+        tokenizerArgs = {},
+        llmExtraInferenceArgs = {
+            "max_tokens": 1000,
+        },
+        hostWebui=False,
+        htmlDataToJsonFunc=dataToJsonFunc
+    )
 
 
 
