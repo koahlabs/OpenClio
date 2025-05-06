@@ -18,11 +18,10 @@ data = clio.getExampleData()
 llm = vllm.LLM(model="Qwen/Qwen3-8B")
 embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 
-# Run clio and output to website
+# Run clio, output to static website, and run webui
 outputDirectory = "output"
 outputWebsitePath = "/clioResults"
 clio.runClio(facets=clio.mainFacets, llm=llm, embeddingModel=embeddingModel, data=data, outputDirectory=outputDirectory, htmlRoot=outputWebsitePath)
-
-# Run webui (optional, you can also just take the files at output/clioResults and put them on your own website (at /clioResults), it's just a static website)
-import 
 ```
+
+That'll provide a link for you, go there, and you should see your cleo outputs! You can also put the files into your own website.
