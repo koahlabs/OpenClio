@@ -4,7 +4,7 @@ Open source version of Anthropic's Clio: A system for privacy-preserving insight
 How do I use?
 
 ```
-pip install git+https://github.com/tangentlabs/django-oscar-paypal.git
+pip install git+https://github.com/Phylliida/OpenClio.git
 ```
 
 ```python
@@ -15,7 +15,7 @@ from sentence_transformers import SentenceTransformer
 # load 10000 wildchat conversations
 data = clio.getExampleData()
 # Load models
-llm = vllm.LLM(model=model_str)
+llm = vllm.LLM(model="Qwen/Qwen3-8B")
 embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 
 # Run clio and output to website
