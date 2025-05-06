@@ -1,3 +1,12 @@
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Tuple, Callable, Any, List, TypeAlias
+import numpy as np
+from numpy import typing as npt
+
+from .faissKMeans import FaissKMeans
+
+EmbeddingArray: TypeAlias = npt.NDArray[np.float32]
+
 @dataclass(frozen=True) # frozen=true gives it hash and eq
 class Facet:
     name: str
@@ -6,6 +15,10 @@ class Facet:
     summaryCriteria: Optional[str] = None
     numeric: Optional[Tuple[int, int]] = None
     getFacetPrompt: Optional[Callable[[Any, "Facet", Any, "OpenClioConfig"], str]] = None # takes in tokenizer, facet, conversation (can be anything), cfg and outputs a prompt to "extract" this facet. If None, will use prompts.getFacetPrompt from the paper
+
+def shouldMakeFacetClusters(facet: Facet) -> bool:
+    """Returns true if we should make the cluster hierarchy for the given facet"""
+    return facet.summaryCriteria is not None
 
 @dataclass
 class FacetValue:
@@ -47,6 +60,7 @@ class OpenClioConfig:
     There's a lot of params here. General guide:
     - Decrease llmBatchSize if you get gpu out of memory errors
     - Decrease maxConversationTokens to around model context length - 1000 (1000 because we need room for prompt and thinking as well)
+    - set tokenizerArgs to {} if you get an error about "enable_thinking" not supported
     - Set llmExtraInferenceArgs to be whatever is the recommended sampler settings for your llm (these will be passed to vllm.SamplingParams)
 
     Beyond that, the default values here are fine and will adapt to your data size.
@@ -104,6 +118,10 @@ class OpenClioConfig:
     maxChildrenForRenaming: int = 10 # Maximum number of children in category to display when deciding what to name it, more will make longer prompt but give more accurate classification
     nRenameSamples: int = 5 # How many times to resample the new name and description that we sample, once the children are assigned to a cluster. More samples will take longer but help decrease noise from ordering of children
 
+    tokenizerArgs: Dict[str, Any] = field(default_factory=lambda: {
+        "enable_thinking": False # don't need thinking for the simple things we are doing, also without this we lose prompt prefix (I think?)
+    }) # Extra parameters to pass into our tokenizer when caling apply_chat_template
+
     llmExtraInferenceArgs: Dict[str, Any] = field(default_factory=lambda: {
         "max_tokens": 1000,
          # default qwen non-thinking sampling params
@@ -123,6 +141,9 @@ class OpenClioConfig:
     htmlConversationFilterFunc: Optional[Callable[[List[Dict[str, str]], ConversationFacetData], bool]] = None # Optional function that takes two inputs (dataPoint: Any, dataPointFacetData: ConversationFacetData) and returns bool if we should include that data on the website.
     htmlDataToJsonFunc: Optional[Callable[[Any], Dict[str, Any]]] = None # Optional function that takes a data point and returns a json of the corresponding conversation. It should look like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey :3"}, ...]. If you just want to dispaly the data as a string, just return a single entry like this: [{"role": "<whatever you want>", "content": "<your str content>"}]
 
+    ### Webui settings
+    webuiPort: int = 8421
+
 @dataclass
 class OpenClioResults:
     facets: List[Facet]
@@ -131,5 +152,5 @@ class OpenClioResults:
     baseKMeans: List[FaissKMeans]
     baseClusters: List[Optional[List[ConversationCluster]]]
     rootClusters: List[Optional[List[ConversationCluster]]]
-    conversations: List[List[Dict[str, str]]]
+    data: List[List[Dict[str, str]]]
     cfg: OpenClioConfig

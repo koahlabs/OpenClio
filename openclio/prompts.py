@@ -6,7 +6,7 @@ global cachedTokenizer
 cachedTokenizer = None
 global replacementCache
 replacementCache = {}
-def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict):
+def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict, tokenizerArgs):
     """
     Optimization to substantially speed up tokenization by caching the results and doing string substitutions at the end
     Requires putting REPLACE at the end of each thing you replace, I did this to avoid overlaps with existing stuff in the data
@@ -14,12 +14,12 @@ def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict)
     global cachedTokenizer
     global replacementCache
     # if they change tokenizer, reset cache
-    if cachedTokenizer != tokenizer:
+    if cachedTokenizer != (tokenizerArgs, tokenizer):
         replacementCache = {}
-        cachedTokenizer = tokenizer
+        cachedTokenizer = (tokenizerArgs, tokenizer)
     if not funcName in replacementCache:
         messages = getMessagesFunc()
-        inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True, enable_thinking=False)
+        inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True, **tokenizerArgs)
         prompt = tokenizer.decode(inputs['input_ids'][0])
         replacementCache[funcName] = prompt
     prompt = replacementCache[funcName]
@@ -28,7 +28,7 @@ def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict)
     return prompt
         
 
-def getSummarizeFacetPrompt(tokenizer, facet, data, cfg, dataToStr):
+def getSummarizeFacetPrompt(tokenizer, facet, data, cfg, dataToStr, tokenizerArgs):
     return doCachedReplacements(
         funcName="simpleFacetPrompt",
         tokenizer=tokenizer,
@@ -54,7 +54,8 @@ Put your answer in this format:
         ],
         replacementsDict={
             "data": dataToStr(data)
-        }
+        },
+        tokenizerArgs=tokenizerArgs
     )
 
 
@@ -100,7 +101,7 @@ def conversationToString(conversation: List[Dict[str, str]], tokenizer, maxToken
     return "\n".join(conversationPieces)
 
 
-def getFacetPrompt(tokenizer, facet, conversation, cfg):
+def getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs):
     conversationStr = conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
     return doCachedReplacements(
         funcName="getFacetPrompt",
@@ -139,10 +140,11 @@ What is your answer to the question <question> {questionREPLACE} </question> abo
             "question": facet.question,
             "prefill": facet.prefill
         },
+        tokenizerArgs=tokenizerArgs
     )
     
 
-def getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsideValues):
+def getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsideValues, tokenizerArgs):
     # Generate name and description for cluster, from G.5
     inClusterStr = "\n".join(clusterFacetValues)
     outOfClusterStr = "\n".join(clusterOutsideValues)
@@ -199,13 +201,14 @@ Remember to analyze both the statements and the contrastive statements carefully
             "summaryCriteria": facet.summaryCriteria,
             "inClusterStr": inClusterStr,
             "outOfClusterStr": outOfClusterStr
-        }
+        },
+        tokenizerArgs=tokenizerArgs
     )
 
 
 
 # Proposing cluster names per neighborhood, from G.7.1
-def getNeighborhoodClusterNamesPrompt(facet, tokenizer, clusters, desiredNames):
+def getNeighborhoodClusterNamesPrompt(facet, tokenizer, clusters, desiredNames, tokenizerArgs):
     clusterStr = "\n".join([f"<cluster> {cluster.name}: {cluster.summary} </cluster>" for cluster in clusters])
 
     return doCachedReplacements(
@@ -263,12 +266,13 @@ Focus on creating meaningful, distinct, and precise (but not overly specific) hi
             "desiredNamesLower": int(0.5 * desiredNames),
             "desiredNamesUpper": int(1.5 * desiredNames),
             "summaryCriteria": facet.summaryCriteria,
-        }
+        },
+        tokenizerArgs=tokenizerArgs,
     )
 
 
 # Deduplicating cluster names across neighborhoods, from G.7.1
-def getDeduplicateClusterNamesPrompt(facet, tokenizer, clusters, desiredNames):
+def getDeduplicateClusterNamesPrompt(facet, tokenizer, clusters, desiredNames, tokenizerArgs):
     clusterStr = "\n".join([f"<cluster> {cluster} </cluster>" for cluster in clusters])
     # I modified to no less than 1 in case it has lots of the same thing
     return doCachedReplacements(
@@ -324,10 +328,11 @@ The names should be clear, meaningful, and capture the essence of the clusters t
             "desiredNames": desiredNames,
             "desiredNamesUpper": int(1.5 * desiredNames),
             "clusterStr": clusterStr
-        }
+        },
+        tokenizerArgs=tokenizerArgs
     )
 
-def getAssignToHighLevelClusterPrompt(tokenizer, clusterToAssign, higherLevelClusters):
+def getAssignToHighLevelClusterPrompt(tokenizer, clusterToAssign, higherLevelClusters, tokenizerArgs):
     clustersStr = "\n".join([f"<cluster> {cluster} </cluster>" for cluster in higherLevelClusters])
     # Assigning to higher-level clusters G.7.1
     return doCachedReplacements(
@@ -391,12 +396,13 @@ Based on this information, determine the most appropriate higher-level cluster a
             "clusterToAssignName": clusterToAssign.name,
             "clusterToAssignSummary": clusterToAssign.summary,
             "clustersStr": clustersStr,
-        }
+        },
+        tokenizerArgs=tokenizerArgs
     )
 
 
 # Renaming higher level clusters from G.7.1
-def getRenamingHigherLevelClusterPrompt(facet, tokenizer, clusters):
+def getRenamingHigherLevelClusterPrompt(facet, tokenizer, clusters, tokenizerArgs):
     clusterStr = "\n".join([f'<cluster> {cluster.name} </cluster>' for cluster in clusters])
     return doCachedReplacements(
         funcName="getRenamingHigherLevelClusterPrompt",
@@ -442,5 +448,6 @@ Here is the summary, which I will follow with the name:
         replacementsDict = {
             "summaryCriteria": facet.summaryCriteria,
             "clusterStr": clusterStr
-        }
+        },
+        tokenizerArgs=tokenizerArgs
     )

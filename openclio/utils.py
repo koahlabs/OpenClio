@@ -4,10 +4,13 @@ import vllm
 from typing import Tuple, List, Dict, Callable, Any
 from sentence_transformers import SentenceTransformer
 import os
+import http.server
+import socketserver
 import pandas as pd
-from prompts import conversationToString
 import itertools
 from collections import deque, defaultdict
+
+from .prompts import conversationToString
 
 ## Stuff for keypoller support on windows
 isWindows = False
@@ -119,13 +122,18 @@ def dedup(data: List[List[Dict[str, str]]],
     
     return dedupedConvs
 
-def getData():
-    """Extracts the data from chonkers/... into the needed form"""
-    d = []
-    for l in os.listdir("chonkers"):
+def getExampleData():
+    """Extracts some example data for parsing"""
+    dataPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wildchatsubset.parquet")
+    subset = pd.read_parquet(dataPath, engine="pyarrow")
+    return [[x for x in subset.iloc[i] if not x is None] for i in range(len(subset))]
+
+def getFullWildchatData(rootPath):
+    """Extracts all wildchat data stored in the given directory (they should look like train-000____.parquet)"""
+    for l in os.listdir(rootPath):
         if l.startswith("train-000"):
             print(l)
-            subset = pd.read_parquet("chonkers/" + l, engine="pyarrow")
+            subset = pd.read_parquet(os.path.join(rootPath, l), engine="pyarrow")
             d += [subset.iloc[i].conversation for i in range(len(subset))]
     return filterDataToEnglish(d)
 
@@ -362,3 +370,14 @@ def getDuplicateFacetValues(
             uniques[k].add(conversationToString(conversations[conversationI], tokenizer=tokenizer, maxTokens=maxConversationTokens))
     return [(k,vs,uniques[k]) for (k,vs) in dups]
 
+def runWebui(path, port):
+    """
+    Runs a simple http server at the given path, using the given port
+    """
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=path, **kwargs)
+
+    with socketserver.TCPServer(("", port), Handler) as httpd:
+        print(f"Serving at http://localhost:{port}")
+        httpd.serve_forever()

@@ -2,36 +2,32 @@ from dataclasses import dataclass, field
 import vllm
 import pandas as pd
 from typing import Any, Union, Tuple, Optional, Callable, Dict, List, TypeAlias
+import traceback
 import faiss 
 import functools
 from sentence_transformers import SentenceTransformer
 import numpy as np
-from numpy import typing as npt
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
 from collections import defaultdict
+from numpy import typing as npt
 import json
 import torch
+import shutil
 import os
 import re
 import random
 import cloudpickle
 from pathlib import Path
 
-from .prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt, getDeduplicateClusterNamesPrompt, getAssignToHighLevelClusterPrompt, getRenamingHigherLevelClusterPrompt, getSummarizeFacetPrompt
-from .utils import flatten, unflatten, runBatched, dedup
-from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults
+from .prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodClusterNamesPrompt, getDeduplicateClusterNamesPrompt, getAssignToHighLevelClusterPrompt, getRenamingHigherLevelClusterPrompt, getSummarizeFacetPrompt, getFacetPrompt, conversationToString
+from .utils import flatten, unflatten, runBatched, dedup, runWebui
+from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .faissKMeans import FaissKMeans
 from .writeOutput import convertOutputToWebpage
-
-EmbeddingArray: TypeAlias = npt.NDArray[np.float32]
-
-def shouldMakeFacetClusters(facet: Facet) -> bool:
-    """Returns true if we should make the cluster hierarchy for the given facet"""
-    return facet.summaryCriteria is not None
 
 # these are facets from the paper
 mainFacets = [
@@ -89,9 +85,10 @@ genericSummaryFacets = [
 def runClio(facets: List[Facet], 
             llm: vllm.LLM,
             embeddingModel: SentenceTransformer,
-            conversations: List[List[Dict[str, str]]],
+            data: List[List[Dict[str, str]]],
             outputDirectory: str,
             htmlRoot: str,
+            hostWebui: bool = True,
             cfg: OpenClioConfig = None,
             **kwargs
         ) -> OpenClioResults:
@@ -106,7 +103,7 @@ def runClio(facets: List[Facet],
     facets -- The facets we will extract from each conversation. You can use facets=openclio.mainFacets to use the facets from the paper.
     llm -- The llm that is used to extract facets and cluster data. This should be a vllm.LLM instance
     embeddingModel -- The embedding model used for clustering data (and a few other things). This should be a SentenceTransformer instance
-    conversations -- The conversations we are running clio on. These should be formatted like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi :3"},...]
+    data -- The conversations we are running clio on. These should be formatted like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi :3"},...] (see OpenClioConfig in opencliotypes.py if your data isn't formatted like this)
     outputDirectory -- The directory path where we store checkpoints/outputs
     htmlRoot -- The path where the visuals will be stored on your website. For example, "/opencliooutputs"
     cfg -- Optional, an instance of openclio.OpenClioConfig, this lets you modify some of openclio's settings. Look at the comments for what individual fields mean.
@@ -123,7 +120,8 @@ def runClio(facets: List[Facet],
         fullPath = os.path.join(outputDirectory, path)
         if os.path.exists(fullPath) and not dependencyModified: # recompute if dependency modified
             try:
-                result = cloudpickle.load(fullPath)
+                with open(fullPath, "rb") as f:
+                    result = cloudpickle.load(f)
                 print(f"Resuming from {fullPath}")
                 return result, False
             except:
@@ -147,27 +145,30 @@ def runClio(facets: List[Facet],
     if cfg.dedupData:
         dedupKeyFunc = cfg.dedupKeyFunc
         if dedupKeyFunc is None:
-            if len(conversations) > 0 and type(conversations[0]) is list or type(conversations[0]) is np.ndarray:
+            if len(data) > 0 and type(data[0]) in [list, np.ndarray, pd.core.series.Series]:
                 # tokenize and truncate key func
                 tokenizer = llm.get_tokenizer()
-                dedupKeyFunc = lambda conversation: prompts.conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
+                print("Using default conversation dedup key func")
+                dedupKeyFunc = lambda conversation: conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
             else:
                 # identity key func
+                print("Using identity key func")
                 dedupKeyFunc = lambda x: x
         print("Deduping data")
-        conversations, dependencyModified = runIfNotExist("dedupedData.pkl", lambda:
-            dedup(conversations, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize)
+        data, dependencyModified = runIfNotExist("dedupedData.pkl", lambda:
+            dedup(data, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize),
+            dependencyModified=dependencyModified
         )
     
 
     print("Getting facet values")
     setSeed(cfg.seed) # doing this before each function call helps ensure reproducability if they resume
-    facetValues, dependencyModified = 
+    facetValues, dependencyModified = \
         runIfNotExist("facetValues.pkl", lambda:
             getFacetValues(
                 facets=facets, 
                 llm=llm,
-                conversations=conversations,
+                data=data,
                 cfg=cfg
             ),
             dependencyModified=dependencyModified
@@ -175,7 +176,7 @@ def runClio(facets: List[Facet],
     
     print("Getting facet value embeddings")
     setSeed(cfg.seed)
-    facetValuesEmbeddings, dependencyModified = 
+    facetValuesEmbeddings, dependencyModified = \
         runIfNotExist("facetValuesEmbeddings.pkl", lambda:
             getFacetValuesEmbeddings(
                 facets=facets,
@@ -188,8 +189,8 @@ def runClio(facets: List[Facet],
     
     print("Getting base clusters")
     setSeed(cfg.seed)
-    (baseKMeans, baseClusters), dependencyModified = 
-        runIfNotExist("baseKMeansAndClusters.pkl", 
+    (baseKMeans, baseClusters), dependencyModified = \
+        runIfNotExist("baseKMeansAndClusters.pkl", lambda:
             getBaseClusters(
                 facets=facets,
                 llm=llm,
@@ -203,7 +204,7 @@ def runClio(facets: List[Facet],
 
     print("Getting higher level clusters")
     setSeed(cfg.seed)
-    rootClusters, dependencyModified =
+    rootClusters, dependencyModified = \
         runIfNotExist("rootClusters.pkl", lambda:
             getHierarchy(
                 facets=facets,
@@ -216,7 +217,7 @@ def runClio(facets: List[Facet],
         )
     
     print("Saving results")
-    res, dependencyModified =
+    output, dependencyModified = \
         runIfNotExist("results.pkl", lambda:
             OpenClioResults(
                 facets=facets,
@@ -225,16 +226,16 @@ def runClio(facets: List[Facet],
                 baseKMeans=baseKMeans,
                 baseClusters=baseClusters,
                 rootClusters=rootClusters,
-                conversations=conversations,
+                data=data,
                 cfg=cfg
             ),
             dependencyModified=dependencyModified
         )
 
-    print("Outputting to webpage")
-    htmlOutputPath = os.path.join(outputDirectory, htmlRoot)
+    htmlOutputPath = os.path.join(outputDirectory, htmlRoot.strip()[1:] if htmlRoot.strip().startswith("/") else htmlRoot)
+    print(f"Outputting to webpage at path {htmlOutputPath}")
     # clear old outputs
-    if os.path.exists(htmlOutputPath):
+    if not htmlRoot in ["/", ""] and os.path.exists(htmlOutputPath):
         shutil.rmtree(htmlOutputPath)
     Path(htmlOutputPath).mkdir(parents=True, exist_ok=True)
     convertOutputToWebpage(
@@ -245,6 +246,28 @@ def runClio(facets: List[Facet],
         conversationFilter=cfg.htmlConversationFilterFunc,
         dataToJson=cfg.htmlDataToJsonFunc,
     )
+
+    # write redirect page if we are nested, so the webui opens to it nicely
+    if not htmlRoot in ["/", ""]:
+        redirectPage = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0; url={htmlRoot}">
+</head>
+<body>
+    <p>If you are not redirected, <a href="{htmlRoot}">click here</a></p>
+</body>
+</html>
+        """
+        with open(os.path.join(outputDirectory, "index.html"), "w") as f:
+            f.write(redirectPage)
+
+    if hostWebui:
+        print(f"Running webui")
+        runWebui(outputDirectory, cfg.webuiPort)
+
+
 
 def getNeighborhoods(
     facetStrValues: List[str],
@@ -351,7 +374,7 @@ def getHierarchy(
                 clusterNamePrompts = []
                 for _ in range(2):
                     random.shuffle(clustersInNeighborhood)# shuffle ordering
-                    clusterNamePrompts.append(getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood))))
+                    clusterNamePrompts.append(getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)), tokenizerArgs=cfg.tokenizerArgs))
                 return clusterNamePrompts                    
             
             def processOutputFunc(clusterIndicesInNeighborhood: Sources, clusterNamePrompts: str, clusterNamesOutputs: str) -> List[Tuple[str, Sources]]:
@@ -379,7 +402,7 @@ def getHierarchy(
                 # shuffle ordering
                 while True:
                     random.shuffle(clustersInNeighborhood)
-                    prompt = getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)))
+                    prompt = getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)), tokenizerArgs=cfg.tokenizerArgs)
                     print(prompt)
                     nonlocal seed # we increment it so duplicate entries will get distinct things
                     seed += 1
@@ -429,7 +452,7 @@ def getHierarchy(
                 targetAmount =  max(1, len(higherCategoriesInNeighborhood)//2) # aim for -1 (arbitrary), but prompt lets it do more or less as needed
                 if len(higherCategoriesInNeighborhood) == 2:
                     targetAmount = 2 # for only two, it'll mangle the categories if we ask it to dedup them into one, so don't do that
-                return getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, targetAmount)
+                return getDeduplicateClusterNamesPrompt(facet, tokenizer, higherCategoriesInNeighborhood, targetAmount, tokenizerArgs=cfg.tokenizerArgs)
             
             def processOutputFunc(
                     higherCategoryIndicesInNeighborhoods: List[Tuple[str, Sources]],
@@ -485,7 +508,7 @@ def getHierarchy(
                 assignToHigherCategoryPrompts = []
                 for i in range(cfg.nCategorizeSamples):
                     random.shuffle(potentialHigherLevelClusters)
-                    assignToHigherCategoryPrompts.append(getAssignToHighLevelClusterPrompt(tokenizer, clusterToAssign=facetCluster, higherLevelClusters=potentialHigherLevelClusters))
+                    assignToHigherCategoryPrompts.append(getAssignToHighLevelClusterPrompt(tokenizer, clusterToAssign=facetCluster, higherLevelClusters=potentialHigherLevelClusters, tokenizerArgs=cfg.tokenizerArgs))
                 return assignToHigherCategoryPrompts
 
             # name and summary will be generated later
@@ -550,7 +573,7 @@ def getHierarchy(
                 renamingPrompts = []
                 for _ in range(cfg.nRenameSamples):
                     random.shuffle(parent.children)
-                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, tokenizer, parent.children[:cfg.maxChildrenForRenaming]))
+                    renamingPrompts.append(getRenamingHigherLevelClusterPrompt(facet, tokenizer, parent.children[:cfg.maxChildrenForRenaming], tokenizerArgs=cfg.tokenizerArgs))
                 return renamingPrompts
             
             def processOutputFunc(parent: ConversationCluster, renamePrompts: List[str], renamingOutputs: List[str]):
@@ -634,7 +657,7 @@ def getBaseClusters(
                     # randomize the ordering to avoid positional biases
                     random.shuffle(clusterFacetValues)
                     random.shuffle(clusterOutsideValues)
-                    prompt = getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsideValues)
+                    prompt = getFacetClusterNamePrompt(tokenizer, facet, clusterFacetValues, clusterOutsideValues, tokenizerArgs=cfg.tokenizerArgs)
                     clusterPrompts.append(prompt)
                 return clusterPrompts
             
@@ -718,12 +741,10 @@ def getFacetValuesEmbeddings(
                     batchSize=cfg.embedBatchSize)
 
 
-
-
 def getFacetValues(
         facets: List[Facet],
         llm: vllm.LLM,
-        conversations: List[List[Dict[str, str]]],
+        data: List[List[Dict[str, str]]],
         cfg: OpenClioConfig
     ) -> List[ConversationFacetData]:
     """
@@ -740,9 +761,9 @@ def getFacetValues(
         inputs = []
         for facet in facets:
             if facet.getFacetPrompt is None:
-                facetInput = prompts.getFacetPrompt(tokenizer, facet, conversation, cfg)
+                facetInput = getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
             else:
-                facetInput = facet.getFacetPrompt(tokenizer, facet, conversation, cfg)
+                facetInput = facet.getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
             inputs.append(facetInput)
         return inputs
     seed = cfg.seed
@@ -764,7 +785,7 @@ def getFacetValues(
                 ) for (facet, value) in zip(facets, facetOutputs)]
         )
 
-    return runBatched(conversations,
+    return runBatched(data,
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,

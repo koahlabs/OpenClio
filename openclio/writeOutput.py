@@ -3,7 +3,7 @@ import os
 import json
 from collections import defaultdict
 from pathlib import Path
-from opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults
+from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 
 # 0 is root/highest level
 def getAllClustersAtLevel(facetI: int, output: OpenClioResults, level: int):
@@ -51,7 +51,7 @@ def encodeClusterAsJson(facetI: int, output: OpenClioResults, cluster: Conversat
                 conversations.append({
                     "facetValue": facetValue.value,
                     "allFacetValues": [{"facet": value.facet.name, "value": value.value} for value in data.facetValues],
-                    "conversation": dataToJson(output.conversations[conversationI])
+                    "conversation": dataToJson(output.data[conversationI])
                 })
             res["conversations"] = conversations
         return res
@@ -134,7 +134,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
         if shouldMakeFacetClusters(facet):
             numLevels = getNumLevels(output, facetI)
             for conv in getAllClustersAtLevel(facetI, output=output, level=numLevels-1):
-                conv.filteredIndices = [convIndex for convIndex in conv.indices if conversationFilter(output.conversations[convIndex], output.facetValues[convIndex])]
+                conv.filteredIndices = [convIndex for convIndex in conv.indices if conversationFilter(output.data[convIndex], output.facetValues[convIndex])]
 
     storeConversationCounts(output)
 
@@ -179,5 +179,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
     pathContainingTemplate = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(pathContainingTemplate, "websiteTemplate.html"), "r") as templateF:
         templateText = templateF.read().replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
-        with open(os.path.join(targetDir, "index.html"), "w") as 
+        with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:
+            outputIndex.write(templateText)
+    
             
