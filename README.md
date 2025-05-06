@@ -25,3 +25,5 @@ clio.runClio(facets=clio.mainFacets, llm=llm, embeddingModel=embeddingModel, dat
 ```
 
 That'll provide a link for you, go there, and you should see your cleo outputs! You can also put the files into your own website.
+
+As you browse, the hash of the website will be modified. This lets you share specific conversations or tree states via URL.
