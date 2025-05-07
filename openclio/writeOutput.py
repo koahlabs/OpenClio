@@ -112,7 +112,7 @@ def filterToEnglish(conversation, conversationFacetData):
 # aim for 10MB or smaller files, and filter to only english ones
 # clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)
 
-def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None):
+def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True):
     """
     Converts the given output to a static webpage and json files, dumped to targetDir
     It's split up into multiple json files, each of max size maxSizePerFile, and streamed as needed
@@ -140,7 +140,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
 
     rootJson = []
     for facetI, facet in enumerate(output.facets):
-        print(f"facet {facet.name}")
+        if verbose: print(f"facet {facet.name}")
         facetJson = {
             "name": facet.name,
             "question": facet.question,
@@ -159,7 +159,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
             fileMap = {}
             while curLevel >= 0:
                 lowerLevel = findLowestLevelThatKeepsSizeLessThanMaxSize(facetI=facetI, output=output, curLevel=curLevel, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson)
-                print(f"Level {lowerLevel} to {curLevel}")
+                if verbose: print(f"Level {lowerLevel} to {curLevel}")
                 facetTargetDirLevels = facetTargetDir / f"levels{lowerLevel}{curLevel}"
                 facetTargetDirLevels.mkdir(parents=True, exist_ok=True)
                 for cluster, jsonData in encodeLevels(facetI=facetI, output=output, lowerLevelInclusive=lowerLevel, highestLevelInclusive=curLevel, fileMap=fileMap, dataToJson=dataToJson):
@@ -181,5 +181,3 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
         templateText = templateF.read().replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
         with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:
             outputIndex.write(templateText)
-    
-            

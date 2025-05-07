@@ -114,23 +114,6 @@ def runClio(facets: List[Facet],
 
     # make the output directory to store checkpoints if it does not exist
     Path(outputDirectory).mkdir(parents=True, exist_ok=True)
-
-    dependencyModified = False
-    def runIfNotExist(path, runFunc, dependencyModified):
-        fullPath = os.path.join(outputDirectory, path)
-        if os.path.exists(fullPath) and not dependencyModified: # recompute if dependency modified
-            try:
-                with open(fullPath, "rb") as f:
-                    result = cloudpickle.load(f)
-                print(f"Resuming from {fullPath}")
-                return result, False
-            except:
-                print(f"Failed to load from path {fullPath}, ignoring")
-                print(traceback.format_exc())
-        res = runFunc()
-        with open(fullPath, "wb") as f:
-            cloudpickle.dump(res, f)
-        return res, True
     
     if cfg is None:
         cfg = OpenClioConfig(**kwargs)
@@ -141,6 +124,27 @@ def runClio(facets: List[Facet],
             else:
                 raise ValueError(f"Unknown OpenClioConfig key {k} with value {v}")
     
+    cfg.print = print if cfg.verbose else lambda *a, **b: None
+    cfg.kmeansArgs['verbose'] = cfg.verbose
+
+    dependencyModified = False
+    def runIfNotExist(path, runFunc, dependencyModified):
+        fullPath = os.path.join(outputDirectory, path)
+        if os.path.exists(fullPath) and not dependencyModified: # recompute if dependency modified
+            try:
+                cfg.print(f"Resuming from {fullPath}...")
+                with open(fullPath, "rb") as f:
+                    result = cloudpickle.load(f)
+                cfg.print(f"Resumed from {fullPath}")
+                return result, False
+            except:
+                cfg.print(f"Failed to load from path {fullPath}, ignoring")
+                cfg.print(traceback.format_exc())
+        res = runFunc()
+        with open(fullPath, "wb") as f:
+            cloudpickle.dump(res, f)
+        return res, True
+    
     
     if cfg.dedupData:
         dedupKeyFunc = cfg.dedupKeyFunc
@@ -148,20 +152,20 @@ def runClio(facets: List[Facet],
             if len(data) > 0 and type(data[0]) in [list, np.ndarray, pd.core.series.Series]:
                 # tokenize and truncate key func
                 tokenizer = llm.get_tokenizer()
-                print("Using default conversation dedup key func")
+                cfg.print("Using default conversation dedup key func")
                 dedupKeyFunc = lambda conversation: conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
             else:
                 # identity key func
-                print("Using identity key func")
+                cfg.print("Using identity key func")
                 dedupKeyFunc = lambda x: x
-        print("Deduping data")
+        cfg.print("Deduping data")
         data, dependencyModified = runIfNotExist("dedupedData.pkl", lambda:
-            dedup(data, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize),
+            dedup(data, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize, verbose=cfg.verbose),
             dependencyModified=dependencyModified
         )
     
 
-    print("Getting facet values")
+    cfg.print("Getting facet values")
     setSeed(cfg.seed) # doing this before each function call helps ensure reproducability if they resume
     facetValues, dependencyModified = \
         runIfNotExist("facetValues.pkl", lambda:
@@ -174,7 +178,7 @@ def runClio(facets: List[Facet],
             dependencyModified=dependencyModified
         )
     
-    print("Getting facet value embeddings")
+    cfg.print("Getting facet value embeddings")
     setSeed(cfg.seed)
     facetValuesEmbeddings, dependencyModified = \
         runIfNotExist("facetValuesEmbeddings.pkl", lambda:
@@ -187,22 +191,24 @@ def runClio(facets: List[Facet],
             dependencyModified=dependencyModified
         )
     
-    print("Getting base clusters")
+    cfg.print("Getting base clusters")
     setSeed(cfg.seed)
-    (baseKMeans, baseClusters), dependencyModified = \
-        runIfNotExist("baseKMeansAndClusters.pkl", lambda:
+    baseClusters, dependencyModified = \
+        runIfNotExist("baseClusters.pkl", lambda:
             getBaseClusters(
                 facets=facets,
                 llm=llm,
                 embeddingModel=embeddingModel,
                 facetValues=facetValues,
                 facetValuesEmbeddings=facetValuesEmbeddings,
-                cfg=cfg
+                cfg=cfg,
+                runIfNotExist=runIfNotExist,
+                dependencyModified=dependencyModified,
             ),
             dependencyModified=dependencyModified
         )
 
-    print("Getting higher level clusters")
+    cfg.print("Getting higher level clusters")
     setSeed(cfg.seed)
     rootClusters, dependencyModified = \
         runIfNotExist("rootClusters.pkl", lambda:
@@ -216,14 +222,13 @@ def runClio(facets: List[Facet],
             dependencyModified=dependencyModified
         )
     
-    print("Saving results")
+    cfg.print("Saving results")
     output, dependencyModified = \
         runIfNotExist("results.pkl", lambda:
             OpenClioResults(
                 facets=facets,
                 facetValues=facetValues,
                 facetValuesEmbeddings=facetValuesEmbeddings,
-                baseKMeans=baseKMeans,
                 baseClusters=baseClusters,
                 rootClusters=rootClusters,
                 data=data,
@@ -233,7 +238,7 @@ def runClio(facets: List[Facet],
         )
 
     htmlOutputPath = os.path.join(outputDirectory, htmlRoot.strip()[1:] if htmlRoot.strip().startswith("/") else htmlRoot)
-    print(f"Outputting to webpage at path {htmlOutputPath}")
+    cfg.print(f"Outputting to webpage at path {htmlOutputPath}")
     # clear old outputs
     if not htmlRoot in ["/", ""] and os.path.exists(htmlOutputPath):
         shutil.rmtree(htmlOutputPath)
@@ -245,6 +250,7 @@ def runClio(facets: List[Facet],
         maxSizePerFile=cfg.htmlMaxSizePerFile,
         conversationFilter=cfg.htmlConversationFilterFunc,
         dataToJson=cfg.htmlDataToJsonFunc,
+        verbose=cfg.verbose
     )
 
     # write redirect page if we are nested, so the webui opens to it nicely
@@ -264,7 +270,7 @@ def runClio(facets: List[Facet],
             f.write(redirectPage)
 
     if hostWebui:
-        print(f"Running webui")
+        cfg.print(f"Running webui")
         runWebui(outputDirectory, cfg.webuiPort)
 
 
@@ -289,7 +295,8 @@ def getNeighborhoods(
                                    getInputs=lambda facetStrValue: facetStrValue,
                                    processBatch=processBatchFunc,
                                    processOutput=lambda facetValue, facetValuePrompt, outputEmbeddings: outputEmbeddings,
-                                   batchSize=cfg.embedBatchSize))
+                                   batchSize=cfg.embedBatchSize,
+                                   verbose=cfg.verbose))
     facetNeighborhoods = []
     numValues = len(facetStrValues)
     # in the paper this is numClusters // 40
@@ -356,9 +363,9 @@ def getHierarchy(
 
             Sources: TypeAlias = List[int]
 
-            print(f"facet {facet} level {level}")
+            cfg.print(f"facet {facet} level {level}")
 
-            print("getting category neighborhoods")
+            cfg.print("getting category neighborhoods")
             kmeans, facetNeighborhoods = getNeighborhoods(
                         facetStrValues=list(map(lambda cluster: f"{cluster.name}\n{cluster.summary}", curLevelFacetClusters)),
                         embeddingModel=embeddingModel,
@@ -367,7 +374,7 @@ def getHierarchy(
 
             #### Get higher level category names ####
 
-            print("getting higher level category names")
+            cfg.print("getting higher level category names")
             tokenizer = llm.get_tokenizer()
             def getInputsFunc(clusterIndicesInNeighborhood: Sources) -> str:
                 clustersInNeighborhood = [curLevelFacetClusters[i] for i in clusterIndicesInNeighborhood]
@@ -386,9 +393,9 @@ def getHierarchy(
                         return [(removePunctuation(clusterName).strip(), clusterIndicesInNeighborhood) for clusterName in clusterNames]
                 '''
                 # don't extract partial because stuck in loops tends to be low quality
-                print("Failed, extracting partial")
-                print(clusterNamePrompts[0])
-                print(clusterNamesOutputs[0])
+                cfg.print("Failed, extracting partial")
+                cfg.print(clusterNamePrompts[0])
+                cfg.print(clusterNamesOutputs[0])
                 for clusterNamesOutput in clusterNamesOutputs:
                     clusterNames = extractAnswerNumberedList(clusterNamesOutput, ignoreNoTrailing=True)
                     # cut it off at desired because it probably got stuck in a loop and made lots of unhelpful ones
@@ -397,13 +404,13 @@ def getHierarchy(
                     if len(clusterNames) != 0: # success at partial parsing
                         break
                 '''
-                print("Failed to extract any names for cluster: manually retrying")
+                cfg.print("Failed to extract any names for cluster: manually retrying")
                 clustersInNeighborhood = [curLevelFacetClusters[i] for i in clusterIndicesInNeighborhood]
                 # shuffle ordering
                 while True:
                     random.shuffle(clustersInNeighborhood)
                     prompt = getNeighborhoodClusterNamesPrompt(facet, tokenizer, clustersInNeighborhood, cfg.nDesiredHigherLevelNamesPerClusterFunc(len(clustersInNeighborhood)), tokenizerArgs=cfg.tokenizerArgs)
-                    print(prompt)
+                    cfg.print(prompt)
                     nonlocal seed # we increment it so duplicate entries will get distinct things
                     seed += 1
                     samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
@@ -411,11 +418,11 @@ def getHierarchy(
                     clusterNamesOutput = [modelOutput.outputs[0].text for modelOutput in modelOutputs][0]
                     clusterNames = extractAnswerNumberedList(clusterNamesOutput, ignoreNoTrailing=True)
                     if len(clusterNames) != 0:
-                        print("Success at manual retry")
+                        cfg.print("Success at manual retry")
                         break
                     else:
-                        print("Failed manual retry, trying again")
-                        print(output)
+                        cfg.print("Failed manual retry, trying again")
+                        cfg.print(output)
                     return [(removePunctuation(clusterName).strip(), clusterIndicesInNeighborhood) for clusterName in clusterNames[:desired]]
             
             def dedupAndMergeSources(values: List[Tuple[str, Sources]]) -> List[Tuple[str, Sources]]:
@@ -431,21 +438,22 @@ def getHierarchy(
                             getInputs=getInputsFunc,
                             processBatch=processBatchFuncLLM,
                             processOutput=processOutputFunc,
-                            batchSize=cfg.llmBatchSize)
+                            batchSize=cfg.llmBatchSize,
+                            verbose=cfg.verbose)
                     )
             )
-            print(f"Got {len(higherCategories)} potential higher categories")
+            cfg.print(f"Got {len(higherCategories)} potential higher categories")
 
             #### Dedup higher categories ####
             
-            print("getting higher level category neighborhoods")
+            cfg.print("getting higher level category neighborhoods")
             kmeans, facetNeighborhoods = getNeighborhoods(
                         facetStrValues=[name for (name, sources) in higherCategories],
                         embeddingModel=embeddingModel,
                         cfg=cfg,
                         nSamplesOutsideNeighborhood=0) # don't grab extra outside neighborhood or our "dedup" will result in more categories, not less (as the overlap leads to double counting worded differently so they don't get deduped)
             
-            print("deduping higher level categories")
+            cfg.print("deduping higher level categories")
             def getInputsFunc(higherCategoryIndicesInNeighborhoods: List[Tuple[str, Sources]]) -> str:
                 # 0 is value, 1 is sources
                 higherCategoriesInNeighborhood = [higherCategories[i][0] for i in higherCategoryIndicesInNeighborhoods]
@@ -480,7 +488,8 @@ def getHierarchy(
                             getInputs=getInputsFunc,
                             processBatch=processBatchFuncLLM,
                             processOutput=processOutputFunc,
-                            batchSize=cfg.llmBatchSize)
+                            batchSize=cfg.llmBatchSize,
+                            verbose=cfg.verbose)
                     )
             )
 
@@ -492,12 +501,12 @@ def getHierarchy(
                 valueMap=lambda x: x[0]
             )
             
-            print(f"Got {len(dedupedCategories)} deduped higher categories")
+            cfg.print(f"Got {len(dedupedCategories)} deduped higher categories")
 
             #### Assign to new best fit higher-level cluster ####
 
             # (they didn't specify how to choose what to put here, but I figure just tracking where parents came from and using all those that might have come from x should work fine)
-            print("Assigning to best fit higher-level clusters")
+            cfg.print("Assigning to best fit higher-level clusters")
             baseClusterPotentialHigherLevelClusters: List[List[str]] = [[] for _ in curLevelFacetClusters]
             for category, sources in dedupedCategories:
                 for sourceI in sources:
@@ -542,9 +551,9 @@ def getHierarchy(
                     # failed to extract cluster from llm, fall back to embedding of the cluster
                     assignedClusters.append(facetCluster.summary + "\n" + facetCluster.name)
                 if len(potentialHigherLevelClusters) == 0:
-                    print("got empty potentialHigherLevelClusters??")
-                    print(assignedClusters)
-                    print(potentialHigherLevelClusters)
+                    cfg.print("got empty potentialHigherLevelClusters??")
+                    cfg.print(assignedClusters)
+                    cfg.print(potentialHigherLevelClusters)
                 # lookup in embedding space the best representative pair
                 # this finds term in potentialHigherLevelClusters that has smallest total distance summed over all assignedClusters
                 bestAssignedCluster, bestHigherLevelClusterAssignedTo = bestRepresentativePair(assignedClusters, potentialHigherLevelClusters, embeddingModel)
@@ -559,7 +568,8 @@ def getHierarchy(
                 getInputs=getInputsFunc,
                 processBatch=processBatchFuncLLM,
                 processOutput=processOutputFunc,
-                batchSize=cfg.llmBatchSize)
+                batchSize=cfg.llmBatchSize,
+                verbose=cfg.verbose)
 
             # remove any parents that didn't have any children assigned
             for parentKey, parentValue in list(parents.items()):
@@ -568,7 +578,7 @@ def getHierarchy(
 
             #### Rename categories based on which children they were given ####
 
-            print("Renaming categories based on children")
+            cfg.print("Renaming categories based on children")
             def getInputsFunc(parent: ConversationCluster) -> List[str]:
                 renamingPrompts = []
                 for _ in range(cfg.nRenameSamples):
@@ -594,12 +604,13 @@ def getHierarchy(
                 getInputs=getInputsFunc,
                 processBatch=processBatchFuncLLM,
                 processOutput=processOutputFunc,
-                batchSize=cfg.llmBatchSize)
+                batchSize=cfg.llmBatchSize,
+                verbose=cfg.verbose)
 
             # Now those parents are our current level, go up higher
             curLevelFacetClusters = list(parents.values())
             level += 1
-            print(f"Now have {len(curLevelFacetClusters)} on level {level}")
+            cfg.print(f"Now have {len(curLevelFacetClusters)} on level {level}")
         topLevelParents.append(curLevelFacetClusters)
     return topLevelParents
 
@@ -609,43 +620,40 @@ def getBaseClusters(
         embeddingModel: SentenceTransformer,
         facetValues: List[ConversationFacetData],
         facetValuesEmbeddings: List[Optional[EmbeddingArray]],
-        cfg: OpenClioConfig
+        cfg: OpenClioConfig,
+        runIfNotExist: Callable[[str, Callable[[], Any], bool], Tuple[Any, bool]],
+        dependencyModified: bool,
     ) -> Tuple[List[Optional[FaissKMeans]], List[Optional[List[ConversationCluster]]]]:
     """
     Gets the base-level clusters for all facets that have shouldMakeFacetClusters(facet) True
-    Returns (listOfKMeansForFacets, listOfListOfConversationClusters)
-    where 
-    listOfKMeansForFacets has a kmeans (or None) for each facet,
-    and
-    listOfListOfConversationClusters has a list of ConversationCluster for each facet
-    there will be cfg.nBaseClusters number of ConversationClusters in that list
+    Returns a list of lists, one list of ConversationCluster for each facet that should make facet clusters True
+    there will be cfg.nBaseClustersFunc(n) number of ConversationClusters in that list
     """
     tokenizer = llm.get_tokenizer()
     seed = cfg.seed
-    kMeansFacets = [None] * len(facets)
     baseClusters = [None] * len(facets)
     for facetI, facet in enumerate(facets):
         if shouldMakeFacetClusters(facet):
             facetEmbeddings = facetValuesEmbeddings[facetI]
             n = facetEmbeddings.shape[0]
-            print(f"Running kmeans for facet {facet.name}")
-            kmeans = FaissKMeans(n_clusters=min(n, cfg.nBaseClustersFunc(n)), random_state=cfg.seed, **cfg.kmeansArgs)
-            # we have to normalize for this to be cosine similarity
-            kmeans.fit(preprocessing.normalize(facetEmbeddings))
-            print("Done with kmeans, computing all distances to cluster centers")
-            distancesToCenters = cdist(facetEmbeddings, kmeans.cluster_centers_)
-            print("Done with distances, getting base cluster names and summaries")
-            kMeansFacets[facetI] = kmeans
-            with open("chonkers/basekmeansanddistances.pkl", "wb") as f:
-                cloudpickle.dump((kmeans, distancesToCenters), f)
+            def getKMeans():
+                cfg.print(f"Running kmeans for facet {facet.name}")
+                kmeans = FaissKMeans(n_clusters=min(n, cfg.nBaseClustersFunc(n)), random_state=cfg.seed, **cfg.kmeansArgs)
+                # we have to normalize for this to be cosine similarity
+                kmeans.fit(preprocessing.normalize(facetEmbeddings))
+                return kmeans.labels_, kmeans.cluster_centers_
+
+            (kmeansLabels, kmeansClusterCenters), _ = runIfNotExist(f"basekmeans{facetI}.pkl", getKMeans, dependencyModified)
 
             def getInputsFunc(clusterIndex : int) -> List[str]:
                 # Get points belonging to this cluster
-                clusterPointsIndices = np.where(kmeans.labels_ == clusterIndex)[0]
+                clusterPointsIndices = np.where(kmeansLabels == clusterIndex)[0]
                 sampledClusterIndices = np.random.choice(clusterPointsIndices, size=min(cfg.maxPointsToSampleInsideCluster, clusterPointsIndices.shape[0]), replace=False)
                 # Get closest points not in this cluster
-                outsideClusterIndices = np.where(kmeans.labels_ != clusterIndex)[0]
-                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distancesToCenters[kmeans.labels_ != clusterIndex, clusterIndex])]
+                outsideClusterIndices = np.where(kmeansLabels != clusterIndex)[0]
+                # this is too large (67GB for all of wildchat) to store all ahead of time, so we just compute it individually for each cluster instead
+                distancesToCenter = cdist(facetEmbeddings, kmeansClusterCenters[clusterIndex].reshape(1, -1))[:,0]
+                closestPointsOutsideClusterIndices = outsideClusterIndices[np.argsort(distancesToCenter[kmeansLabels != clusterIndex])]
                 sampledOutsideClusterIndices = closestPointsOutsideClusterIndices[:min(cfg.maxPointsToSampleOutsideCluster, closestPointsOutsideClusterIndices.shape[0])]
 
                 # grab the (deduplicated) facet values
@@ -668,7 +676,7 @@ def getBaseClusters(
                 try:
                     modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
                 except:
-                    with open("chonkers/badInputs.pkl", "wb") as f:
+                    with open("badInputs.pkl", "wb") as f:
                         cloudpickle.dump(batchOfPrompts, f)
                     raise
                 return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
@@ -678,7 +686,7 @@ def getBaseClusters(
                     clusterPrompts: List[str],
                     clusterOutputs: List[str]
                 ) -> ConversationCluster:
-                    clusterPointsIndices = np.arange(len(facetEmbeddings))[kmeans.labels_ == clusterIndex]
+                    clusterPointsIndices = np.arange(len(facetEmbeddings))[kmeansLabels == clusterIndex]
                     summary, name = getMedoidSummaryAndName(clusterOutputs, embeddingModel)
                     return ConversationCluster(
                             facet=facet,
@@ -686,13 +694,14 @@ def getBaseClusters(
                             name=name,
                             indices=clusterPointsIndices,
                         )
-            facetBaseClusters = runBatched(range(len(kmeans.cluster_centers_)),
+            facetBaseClusters = runBatched(range(len(kmeansClusterCenters)),
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,
-               batchSize=cfg.llmBatchSize)
+               batchSize=cfg.llmBatchSize,
+               verbose=cfg.verbose)
             baseClusters[facetI] = facetBaseClusters
-    return kMeansFacets, baseClusters
+    return baseClusters
         
     
 
@@ -700,7 +709,8 @@ def getBaseClusters(
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,
-               batchSize=cfg.llmBatchSize)
+               batchSize=cfg.llmBatchSize,
+               verbose=cfg.verbose)
 
 def getFacetValuesEmbeddings(
         facets: List[Facet],
@@ -738,7 +748,8 @@ def getFacetValuesEmbeddings(
                     getInputs=getInputsFunc,
                     processBatch=processBatchFunc,
                     processOutput=processOutputFunc,
-                    batchSize=cfg.embedBatchSize)
+                    batchSize=cfg.embedBatchSize,
+                    verbose=cfg.verbose)
 
 
 def getFacetValues(
@@ -789,7 +800,8 @@ def getFacetValues(
                getInputs=getInputsFunc,
                processBatch=processBatchFunc,
                processOutput=processOutputFunc,
-               batchSize=cfg.llmBatchSize)
+               batchSize=cfg.llmBatchSize,
+               verbose=cfg.verbose)
 
 ##### Various utility parsing stuff #####
 def connectedComponentsFromMask(mask: np.ndarray) -> List[np.ndarray]:

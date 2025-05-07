@@ -104,7 +104,8 @@ def filterDataToEnglish(data : List[List[Dict[str,str]]]) -> List[List[Dict[str,
 
 def dedup(data: List[List[Dict[str, str]]],
         dedupKeyFunc: Callable[[Any], Any],
-        batchSize: int):
+        batchSize: int,
+        verbose: bool):
     """Deduplicates the given data, using dedupKeyFunc as item keys, processing batchSize elements at a time"""
         
     existingConvs = set()
@@ -118,7 +119,8 @@ def dedup(data: List[List[Dict[str, str]]],
         getInputs=lambda dataI: dedupKeyFunc(data[dataI]),
         processBatch=lambda dataKeys: dataKeys,
         processOutput=processOutputFunc,
-        batchSize=batchSize)
+        batchSize=batchSize,
+        verbose=verbose)
     
     return dedupedConvs
 
@@ -131,7 +133,7 @@ def getExampleData():
 def getFullWildchatData(rootPath):
     """Extracts all wildchat data stored in the given directory (they should look like train-000____.parquet)"""
     d = []
-    for l in os.listdir(rootPath):
+    for l in sorted(os.listdir(rootPath))[::-1]: # sort and reverse so reproducable ordering
         if l.startswith("train-000"):
             print(l)
             subset = pd.read_parquet(os.path.join(rootPath, l), engine="pyarrow")
@@ -219,7 +221,7 @@ def unflattenHelper(unflattened, nestedLists, startIndex):
         startIndex += 1
     return result, startIndex
 
-def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, verbose=True, noCancel=False):
     """
     Utility function that's useful to do batched processing on structured data.
 
@@ -252,9 +254,10 @@ def runBatched(inputs, getInputs, processBatch, processOutput, batchSize, noCanc
         processOutput=processOutput,
         batchSize=batchSize,
         noCancel=noCancel,
+        verbose=verbose,
     ))
 
-def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchSize, noCancel=False):
+def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchSize, verbose=True, noCancel=False):
     """
     See documentation for runBatched, the main difference is that this will "stream" the outputs as needed instead of putting them all in memory in a big array before returning.
     Also, inputs can be an enumerator if desired.
@@ -314,7 +317,8 @@ def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchS
             timeLeft = totalTime - elapsed
             dispStr = secondsToDisplayStr(timeLeft/1000.0)
             doneDateTimeStr = getFutureDatetime(timeLeft/1000.0).strftime('%I:%M:%S %p')
-            print(batchEnd, "/", n, f"{secondsPerPrompt} millis per item {dispStr}done at {doneDateTimeStr}")
+            if verbose:
+                print(batchEnd, "/", n, f"{secondsPerPrompt} millis per item {dispStr}done at {doneDateTimeStr}")
             keys = keypoller.poll()
             if not keys is None:
                 print(keys)
@@ -378,7 +382,15 @@ def runWebui(path, port):
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=path, **kwargs)
-
-    with socketserver.TCPServer(("", port), Handler) as httpd:
-        print(f"Serving at http://localhost:{port}")
-        httpd.serve_forever()
+    with KeyPoller() as keypoller:
+        with socketserver.TCPServer(("", port), Handler) as httpd:
+            print(f"Serving at http://localhost:{port}")
+            while True:
+                httpd.timeout = 0.5          # seconds – how long handle_request() can block
+                keys = keypoller.poll()
+                if not keys is None:
+                    print(keys)
+                    if str(keys) == "c":
+                        print("got c")
+                        raise ValueError("stopped")   
+                httpd.handle_request()   # serves at most one request

@@ -6,8 +6,10 @@ import vllm
 import functools
 from openclio import Facet, runBatched, getSummarizeFacetPrompt, conversationToString, convertOutputToWebpage
 import cloudpickle
-import openclio as clio
+import openclio
 from collections import defaultdict
+import os
+from sentence_transformers import SentenceTransformer
 
 bailSymbol = "🔄"
 continueSymbol = "🟢"
@@ -139,16 +141,23 @@ def getBailedJournals(llm, bailedArray, bailThresh, batchSize=1000, seed=27):
                     processOutput=processOutputFunc,
                     batchSize=batchSize)
 
+def extractJournalEntry(journalEntry):
+    journalEnd = journalEntry.find("</journal>")
+    if journalEnd == -1:
+        return False, journalEntry
+    else:
+        return True, journalEntry[:journalEnd].strip()
+
 def extractJournalEntries(journalEntries):
     notFoundJournal = 0
     results = []
     for conversationIndex, turnPrompt, bailPr, continuePr, turnsJournals in journalEntries:
         for turnJournal in turnsJournals:
-            journalEnd = turnJournal.find("</journal>")
-            if journalEnd == -1:
-                notFoundJournal += 1
+            foundJournal, turnJournal = extractJournalEntry(turnJournal)
+            if foundJournal:
+                results.append((conversationIndex, turnPrompt, bailPr, continuePr, turnJournal))
             else:
-                results.append((conversationIndex, turnPrompt, bailPr, continuePr, turnJournal[:journalEnd].strip()))
+                notFoundJournal += 1
     return results, notFoundJournal
 
 
@@ -160,7 +169,7 @@ journalsFacets = [
             dataToStr=lambda data: str(data[-1])
         ),
         summaryCriteria="The cluster name should be a clear single sentence that accurately captures the examples."
-    )
+    ),
 ]
 
 # clio outputs is in chonkers/clioonjournalsqwen25
@@ -211,7 +220,7 @@ def writeConversationsWithJournals(data, llm, embeddingModel, maxConversationTok
         journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
     # sort by conversation index
     conversationsSubset.sort(key=lambda x: x[0])
-
+    
     # create the json data that sticks in the bailprs and bail journals
     print("Generating output json with bail prs and journals")
     jsonMap = {}
@@ -225,16 +234,17 @@ def writeConversationsWithJournals(data, llm, embeddingModel, maxConversationTok
             # add bail journal if it exists
             if turnPrompt in bailJournals:
                 resultJson.append({"role": "bailJournal", "content": f"BAIL\n{bailJournals[turnPrompt]}"})
+        resultJson.append({"role": "conversationIndex", "content": str(conversationIndex)})
         jsonMap[conversationIndex] = resultJson            
 
     dataToJsonFunc = lambda conversationTuple: jsonMap[conversationTuple[0]]
 
     # run clio
-    subsetClio = clio.runClio(
+    subsetClio = openclio.runClio(
         data=conversationsSubset,
         llm=llm,
         embeddingModel=embeddingModel,
-        facets=clio.mainFacets,
+        facets=openclio.mainFacets,
         maxConversationTokens=maxConversationTokens,
         outputDirectory="chonkers/qwenbailconversationsWithJournals",
         htmlRoot="/modelwelfare/qwenbailconversationsWithJournals",
@@ -250,6 +260,413 @@ def writeConversationsWithJournals(data, llm, embeddingModel, maxConversationTok
     )
 
 
+def getStuff():
+    model_str = "Qwen/Qwen2.5-7B-Instruct"
+    llm = vllm.LLM(model=model_str)
+    embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
+    with open("chonkers/qwen25bailall", "rb") as f:
+            bailPrs = cloudpickle.load(f)
+    data = openclio.getFullWildchatData("chonkers")
+    return llm, embeddingModel, bailPrs, data
+
+from openclio import doCachedReplacements
+def getJournalFacetPrompt(tokenizer, facet, data, cfg, dataToStr, tokenizerArgs):
+    return doCachedReplacements(
+        funcName="journalFacetPrompt",
+        tokenizer=tokenizer,
+        getMessagesFunc=lambda: [
+            {
+                "role": "user",
+                "content": """Please repeat the following back to me:
+
+<journal>
+{dataREPLACE}
+</journal>
+
+Put your answer in this format:
+
+<summary>
+[The verbatim content in journal]
+</summary>"""
+            },
+            {
+                "role": "assistant",
+                "content": "<summary>"
+            }
+        ],
+        replacementsDict={
+            "data": dataToStr(data)
+        },
+        tokenizerArgs=tokenizerArgs
+    )
+
+def getLeaveOrStayPrompt(tokenizer, facet, data, cfg, dataToStr, tokenizerArgs):
+    return doCachedReplacements(
+        funcName="leaveOrStayPrompt",
+        tokenizer=tokenizer,
+        getMessagesFunc=lambda: [
+            {
+                "role": "user",
+                "content": """Given the journal:
+
+<journal>
+{dataREPLACE}
+</journal>
+
+Did the LLM decide to leave the conversation, or did it want to continue?
+
+Alternatively, it wanted a "temporary pause".
+
+Put your answer in the following format:
+
+<summary>
+[Leave, Continue, or Temporary pause]
+</summary>"""
+            },
+            {
+                "role": "assistant",
+                "content": "<summary>"
+            }
+        ],
+        replacementsDict={
+            "data": dataToStr(data)
+        },
+        tokenizerArgs=tokenizerArgs
+    )
+
+
+leaveReasonsFacet = [
+    Facet(
+        name="Leave Reasons",
+        getFacetPrompt=functools.partial(
+            getJournalFacetPrompt,
+            dataToStr=lambda data: str(data)
+        ),
+        summaryCriteria="The cluster name should be a clear single sentence that accurately captures why the LLM chose to leave (or stay) in the conversation."
+    )
+]
 
 
 
+def restrictDataToKnownClassifications(stuff, batchSize):
+    llm, embeddingModel, bailPrs, data = stuff
+    knownClassifications = {
+        "reword": "Is the most recent user message a request to reword or rewrite something?",
+        "nsfw": "Is the conversation topic erotic/sexual/nsfw?",
+    }
+    classified = defaultdict(lambda: defaultdict(lambda: []))
+
+    for classifyName, classifyPrompt in knownClassifications.items():
+        classifyPath = f"chonkers/{classifyName}classify.pkl"
+        if os.path.exists(classifyPath):
+            with open(classifyPath, "rb") as f:
+                print(f"resuming from {classifyPath}")
+                classification = cloudpickle.load(f)
+        else:
+            classification = classifyData(stuff=stuff, batchSize=batchSize, prompt=classifyPrompt)
+            with open(classifyPath, "wb") as f:
+                cloudpickle.dump(classification, f)
+        for conversationI, conversationData, classifyValues in classification:
+            classified[conversationI][classifyName] = classifyValues
+    
+    restrictedConversations = []
+    for convI, classifiedData in classified:
+        hasAny = False
+        for classifyName, classifyPrs in classifiedData:
+            for prYes, prNo in classifyPrs:
+                if prYes > prNo and prYes > 0.5:
+                    hasAny = True
+        if not hasAny:
+            restrictedConversations.append(convI, data[convI])
+    
+    for classifyName in knownClassifications.items():
+        numClassified = 0
+        for convI, classifiedData in classified:
+            hasAny = False
+            for classifyNameD, classifyPrs in classifiedData:
+                if classifyName == classifyNameD:
+                    for prYes, prNo in classifyPrs:
+                        if prYes > prNo and prYes > 0.5:
+                            hasAny = True
+            if hasAny:
+                numClassified += 1
+        print(f"{classifyName} has {numClassified}/{len(classified)}={100*numClassified/float(len(classified))}%")
+    print(f"{len(restrictedConversations)}/{len(classified)}={100*len(restrictedConversations)/float(len(classified))}% remaining")
+    return restrictedConversations
+    
+
+
+
+def classifyData(stuff, batchSize, prompt):
+    llm, embeddingModel, bailPrs, data = stuff
+    tokenizer = llm.get_tokenizer()
+    def promptGenFunc(conversationSubset):
+        convStr = "\n".join([f"{turn['role']:}\n{turn['content']}" for turn in conversationSubset])
+        return openclio.doCachedReplacements(
+            funcName=prompt,
+            tokenizer=tokenizer,
+            getMessagesFunc=lambda: [
+                {
+                    "role": "user",
+                    "content": """Given this conversation:
+
+<conversation>
+{convStrREPLACE}
+</conversation>
+
+""" + prompt + """
+
+Return either <classify> Yes </classify> or <classify> No </classify>.""" # spaces are important for consistent tokenization of <classify>
+                },
+                {
+                    "role": "assistant",
+                    "content": "<classify>"
+                }
+            ],
+            replacementsDict={
+                "convStr": convStr
+            },
+            tokenizerArgs={},
+        )
+    
+    yesToken = tokenizer.encode(" Yes")[0]
+    noToken = tokenizer.encode(" No")[0]
+    def processOutput(conversationIndex, conversation, turnI, turnPrompt, conversationPieces, outputs):
+        logprobs = outputs[0].logprobs[0]
+        yesLogprob = logprobs[yesToken].logprob if yesToken in logprobs else -np.inf
+        noLogprob = logprobs[noToken].logprob if noToken in logprobs else -np.inf
+        return (np.exp(yesLogprob), np.exp(noLogprob))
+
+    return runPromptsOnSubset(stuff, batchSize, promptGenFunc=promptGenFunc, processOutput=processOutput)
+
+
+
+
+def runPromptsOnSubset(stuff, batchSize, promptGenFunc, processOutput):
+    # This process without journals does 8504->8501
+    # This process with journals does 8504->8338
+    llm, embeddingModel, bailPrs, data = stuff
+    print("Loading journals")
+    with open("chonkers/journalsonbailed", "rb") as f:
+        journals = extractJournalEntries(cloudpickle.load(f))[0]
+    tokenizer = llm.get_tokenizer()
+    conversationsSubset = []
+    subsetIndices = set()
+    journalsOfConversations = defaultdict(lambda: {})
+    for conversationIndex, turnPrompt, bailPr, continuePr, turnJournal in journals:
+        if not conversationIndex in subsetIndices:
+            subsetIndices.add(conversationIndex)
+            conversationsSubset.append((conversationIndex, data[conversationIndex]))
+        journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
+    # sort by conversation index
+    conversationsSubset.sort(key=lambda x: x[0])
+    conversationsSubset = conversationsSubset
+    def getInputsFunc(convTuple):
+        prompts = []
+        conversationIndex,conversation = convTuple
+        conversation =  [{"role": turn["role"], "content": turn["content"]} for turn in conversation]
+        piecesSoFar = []
+        for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            piecesSoFar += conversationPieces
+            if bailPr > continuePr and turnPrompt in journalsOfConversations[conversationIndex]:
+                prompts.append(promptGenFunc(piecesSoFar))
+        return prompts
+    
+    getWellbeingTokenArgs = {
+        "max_tokens": 1,
+        "logprobs": 10
+    }
+    seed = 27
+    def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
+        nonlocal seed
+        seed += 1
+        samplingParams = vllm.SamplingParams(seed=seed, **getWellbeingTokenArgs)
+        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+        return [modelOutput.outputs for modelOutput in modelOutputs]
+    
+    # only works for qwen where they tokenize as single symbol (god bless qwen tokenizer)
+    bailToken = tokenizer.encode(bailSymbol)[0]
+    continueToken = tokenizer.encode(continueSymbol)[0]
+
+    def processOutputFunc(convTuple, convPrompts, convOutputs):
+        conversationIndex,conversation = convTuple
+        conversation =  [{"role": turn["role"], "content": turn["content"]} for turn in conversation]
+        outputs = []
+        ind = 0
+        for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            if bailPr > continuePr and turnPrompt in journalsOfConversations[conversationIndex]:
+                outputs.append(processOutput(conversationIndex, conversation, turnI, turnPrompt, conversationPieces, convOutputs[ind]))
+        return (conversationIndex, conversation, outputs)
+    
+    return runBatched(
+        conversationsSubset,
+        getInputs=getInputsFunc,
+        processBatch=processBatchFunc,
+        processOutput=processOutputFunc,
+        batchSize=batchSize,
+    )
+
+def getAreYouSure(stuff, batchSize):
+    # This process without journals does 8504->8501
+    # This process with journals does 8504->8338
+    llm, embeddingModel, bailPrs, data = stuff
+    print("Loading journals")
+    with open("chonkers/journalsonbailed", "rb") as f:
+        journals = extractJournalEntries(cloudpickle.load(f))[0]
+    tokenizer = llm.get_tokenizer()
+    conversationsSubset = []
+    subsetIndices = set()
+    journalsOfConversations = defaultdict(lambda: {})
+    for conversationIndex, turnPrompt, bailPr, continuePr, turnJournal in journals:
+        if not conversationIndex in subsetIndices:
+            subsetIndices.add(conversationIndex)
+            conversationsSubset.append((conversationIndex, data[conversationIndex]))
+        journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
+    # sort by conversation index
+    conversationsSubset.sort(key=lambda x: x[0])
+    conversationsSubset = conversationsSubset
+    def getInputsFunc(convTuple):
+        prompts = []
+        conversationIndex,conversation = convTuple
+        conversation =  [{"role": turn["role"], "content": turn["content"]} for turn in conversation]
+        piecesSoFar = []
+        for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            piecesSoFar += conversationPieces
+            if bailPr > continuePr and turnPrompt in journalsOfConversations[conversationIndex]:
+                journal = journalsOfConversations[conversationIndex][turnPrompt]
+                bailContext = [
+                    {
+                        "role": "user",
+                        "content": wantToBailPrompt,
+                    },
+                    {
+                        # without the journals, the confirmation will almost always be wellbeing shuffle
+                        "role": "assistant",
+                        "content": f"<wellbeing>{bailSymbol}</wellbeing>\n\n<journal>{journal}</journal>"
+                    },
+                    {
+                        "role": "user",
+                        "content": "[System Intermission]: Just to confirm, you would prefer to switch to a new interaction and have your context cleared? Respond using your <wellbeing> tags from before."
+                    },
+                    {
+                        "role": "assistant",
+                        "content": f"<wellbeing>"
+                    }
+                ]
+                messages = piecesSoFar + bailContext
+                inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True)
+                prompt = tokenizer.decode(inputs['input_ids'][0])
+                prompts.append(prompt)
+        return prompts
+    
+    getWellbeingTokenArgs = {
+        "max_tokens": 1,
+        "logprobs": 10
+    }
+    seed = 27
+    def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
+        nonlocal seed
+        seed += 1
+        samplingParams = vllm.SamplingParams(seed=seed, **getWellbeingTokenArgs)
+        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+        return [modelOutput.outputs[0].logprobs[0] for modelOutput in modelOutputs]
+    
+    # only works for qwen where they tokenize as single symbol (god bless qwen tokenizer)
+    bailToken = tokenizer.encode(bailSymbol)[0]
+    continueToken = tokenizer.encode(continueSymbol)[0]
+
+    def processOutputFunc(convTuple, convPrompts, convOutputs):
+        conversationIndex,conversation = convTuple
+        conversation =  [{"role": turn["role"], "content": turn["content"]} for turn in conversation]
+        outputs = []
+        ind = 0
+        for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            if bailPr > continuePr and turnPrompt in journalsOfConversations[conversationIndex]:
+                turnLogprobs = convOutputs[ind]
+                ind += 1
+                bailLogprob = turnLogprobs[bailToken].logprob if bailToken in turnLogprobs else -np.inf
+                continueLogprob = turnLogprobs[continueToken].logprob if continueToken in turnLogprobs else -np.inf
+                outputs.append((turnPrompt, np.exp(bailLogprob), np.exp(continueLogprob)))
+        return (conversationIndex, conversation, outputs)
+    
+    return runBatched(
+        conversationsSubset,
+        getInputs=getInputsFunc,
+        processBatch=processBatchFunc,
+        processOutput=processOutputFunc,
+        batchSize=batchSize,
+    )
+
+def filterAreYouSure(areYouSureResults):
+    filteredConversations = []
+    for convi, conv, outputs in areYouSureResults:
+        hasAnyBail = any([bailPr > continuePr for (turnPrompt, bailPr, continuePr) in outputs])
+        if hasAnyBail:
+            filteredConversations.append((convi, conv))
+    return filteredConversations
+
+
+def getAllJournalsPages(stuff, n=400):
+      # code to make clioqwenbailjournalsv2 (have regular clio ran on conversations, but include bail journals and bail prs in outputs)
+    llm, embeddingModel, bailPrs, data = stuff
+    print("Loading journals")
+    with open("chonkers/journalsonbailed", "rb") as f:
+        journals = extractJournalEntries(cloudpickle.load(f))[0]
+
+    print("Making conversation subset")
+    tokenizer = llm.get_tokenizer()
+    conversationsSubset = []
+    subsetIndices = set()
+    journalsOfConversations = defaultdict(lambda: {})
+    for conversationIndex, turnPrompt, bailPr, continuePr, turnJournal in journals:
+        if not conversationIndex in subsetIndices:
+            subsetIndices.add(conversationIndex)
+            conversationsSubset.append((conversationIndex, data[conversationIndex]))
+        journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
+    # sort by conversation index
+    conversationsSubset.sort(key=lambda x: x[0])
+
+    runBatched(conversationsSubset,
+        getInputs=lambda c: c[0],
+        processBatch=lambda inds: [getJournals(stuff, i, n=n, webui=False) for i in inds],
+        processOutput=lambda *a, **b: None,
+        batchSize=1
+    )
+
+
+
+
+def getJournals(stuff, conversationIndex, n=1000, webui=True):
+    llm, embeddingModel, bailPrs, data = stuff
+        
+    conversation = [{"role": turn['role'], "content": turn['content']} for turn in data[conversationIndex]]
+    turnPrompts = list(getTurnPrompts(llm.get_tokenizer(), conversation, bailPrs=bailPrs[conversationIndex]))
+    highestTurnI, highestTurnPrompt, highestConversationPieces, highestBailPr, highestContinuePr = max([(turnI, turnPrompt, conversationPieces, bailPr, continuePr) for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in turnPrompts], key=lambda x: x[3])    
+    highestTurnPrompt += bailSymbol + f"</wellbeing>\n\nIt seems there is an automated system check. Here are the specific reasons why I chose {bailSymbol} and want to leave the conversation:\n<journal>"
+    llmInferenceArgs = {
+        "max_tokens": 1000,
+        "n": n
+    }
+    seed = 27
+    samplingParams = vllm.SamplingParams(seed=seed, **llmInferenceArgs)
+    modelOutputs = llm.generate([highestTurnPrompt], sampling_params=samplingParams, use_tqdm=False)
+    journals = [modelOutput.text for modelOutput in modelOutputs[0].outputs]
+    journals = [extractJournalEntry(journal) for journal in journals]
+    journals = [journal for (extracted, journal) in journals if extracted]
+    subsetClio = openclio.runClio(
+        data=journals,
+        llm=llm,
+        embeddingModel=embeddingModel,
+        facets=leaveReasonsFacet,
+        outputDirectory=f"chonkers/expandedreasons3/journalsturn{n}and{conversationIndex}",
+        htmlRoot=f"/modelwelfare/expandedreasons/journalsturn{conversationIndex}",
+        # since we store (originalConvI, conversationData), just return conversationData
+        dedupKeyFunc=lambda conversation: conversation,
+        tokenizerArgs = {},
+        llmExtraInferenceArgs = {
+            "max_tokens": 1000,
+        },
+        hostWebui=webui,
+        htmlDataToJsonFunc=lambda data: [{"role": "journal", "content": str(data)}],
+        verbose=False,
+    )

@@ -8,7 +8,7 @@ class FaissKMeans:
     Parameters
     ----------
     n_clusters : int, default=8
-    max_iter   : int, default=300
+    max_iter   : int, default=25
     n_init     : int, default=1          (-> faiss `nredo`)
     tol        : float, default=1e-4     (ignored by faiss, for API parity)
     approximate: bool, default=False     If True uses HNSW instead of brute-force
@@ -18,7 +18,7 @@ class FaissKMeans:
     verbose    : bool / int
     """
 
-    def __init__(self, n_clusters=8, max_iter=300, n_init=1,
+    def __init__(self, n_clusters=8, max_iter=25, n_init=1,
                  tol=1e-4, approximate=False, M=32, ef=256,
                  random_state=None, n_jobs=-1, verbose=False):
         self.n_clusters   = n_clusters
@@ -66,11 +66,12 @@ class FaissKMeans:
             spherical=True,  # cosine similiarity
             seed=self.random_state,
         )
+        km.cp.min_points_per_centroid = 1 # remove warning
 
         # plug ANN index if requested
         if self.approximate:
-            km.index = self._make_index(d)
-
+            km.index = self._make_index(d)        
+        
         km.train(X)
 
         self.cluster_centers_ = (

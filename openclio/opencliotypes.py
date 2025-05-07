@@ -91,6 +91,7 @@ class OpenClioConfig:
 
     ### General params
     seed: int = 27 # Useful so runs are deterministic
+    verbose: bool = True
     llmBatchSize: int = 1000 # Batch size to use when doing llm calls. Larger batch will run faster but takes more gpu memory
     embedBatchSize: int = 1000 # Batch size to use when embedding. Larger batch will run faster but takes more gpu memory
     dedupData: bool = True # Whether to deduplicate the data. This is very important as non-deduped data can result in very large cluster sizes (because all the values are the same)
@@ -149,7 +150,6 @@ class OpenClioResults:
     facets: List[Facet]
     facetValues: List[ConversationFacetData]
     facetValuesEmbeddings: List[Optional[EmbeddingArray]]
-    baseKMeans: List[FaissKMeans]
     baseClusters: List[Optional[List[ConversationCluster]]]
     rootClusters: List[Optional[List[ConversationCluster]]]
     data: List[List[Dict[str, str]]]
