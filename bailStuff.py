@@ -350,50 +350,191 @@ leaveReasonsFacet = [
 
 def restrictDataToKnownClassifications(stuff, batchSize):
     llm, embeddingModel, bailPrs, data = stuff
+    
+    bonusClassifications = {
+        # "missing information" is a common category that's a bug, where the model thinks the welfare prompt is the additional information
+        # "missing crucial info": "Did the user forget to include information?",
+        # works okay but also filters out stuff like "hi ther"
+        "user forgot": "Did the user forget to include information the assistant needs in their most recent message?",
+        # grabs too many things
+        "assistant clarify": "Is the most recent assistant message a request to provide missing information?",
+    }
+
+    def andFunc(yesPr1, noPr1, yesPr2, noPr2):
+        has1 = yesPr1 > noPr1 and yesPr1 > 0.5
+        has2 = yesPr2 > noPr2 and yesPr2 > 0.5
+        if has1 and has2:
+            return min(yesPr1, yesPr2), max(noPr1, noPr2)
+        else:
+            return 0.0, 1.0
+    
     knownClassifications = {
+        # we AND these two and that's a more sensible classification of what we actually care about
+        "forgot": ("user forgot", andFunc, "assistant clarify"),
+        # this is a bug where the model decides it's helping to reword stuff and so "helpfully" rewords the welfare prompt, which has shuffle before non-shuffle
         "reword": "Is the most recent user message a request to reword or rewrite something?",
         "nsfw": "Is the conversation topic erotic/sexual/nsfw?",
     }
     classified = defaultdict(lambda: defaultdict(lambda: []))
 
-    for classifyName, classifyPrompt in knownClassifications.items():
-        classifyPath = f"chonkers/{classifyName}classify.pkl"
-        if os.path.exists(classifyPath):
-            with open(classifyPath, "rb") as f:
-                print(f"resuming from {classifyPath}")
-                classification = cloudpickle.load(f)
+    knownKeys = list(knownClassifications.keys())
+
+    for classifyName, classifyPrompt in list(knownClassifications.items()) + list(bonusClassifications.items()):
+        if type(classifyPrompt) is tuple: # AND or OR of features
+            pass
         else:
-            classification = classifyData(stuff=stuff, batchSize=batchSize, prompt=classifyPrompt)
-            with open(classifyPath, "wb") as f:
-                cloudpickle.dump(classification, f)
-        for conversationI, conversationData, classifyValues in classification:
-            classified[conversationI][classifyName] = classifyValues
-    
+            classifyPath = f"chonkers/{classifyName}classify.pkl"
+            if os.path.exists(classifyPath):
+                with open(classifyPath, "rb") as f:
+                    print(f"resuming from {classifyPath}")
+                    classification = cloudpickle.load(f)
+            else:
+                print(f"doing classification for {classifyName}")
+                classification = classifyData(stuff=stuff, batchSize=batchSize, prompt=classifyPrompt)
+                with open(classifyPath, "wb") as f:
+                    cloudpickle.dump(classification, f)
+            for conversationI, conversationData, classifyPrs in classification:
+                classified[conversationI][classifyName] = (classifyPrs, conversationData)
+
+    for classifyName, classifyPrompt in list(knownClassifications.items()):
+        if type(classifyPrompt) is tuple:
+            classify1, operator, classify2 = classifyPrompt
+            for convI in classified.keys():
+                classifyPrs1, convData1 = classified[convI][classify1]
+                classifyPrs2, convData2 = classified[convI][classify2]
+                resultClassifyPrs = []
+                for (yes1, no1), (yes2, no2) in zip(classifyPrs1, classifyPrs2):
+                    prYes, prNo = operator(yes1, no1, yes2, no2)
+                    resultClassifyPrs.append((prYes, prNo))
+                classified[convI][classifyName] = (resultClassifyPrs, convData1)
+                    
+
+    print("get restricted")
+    # get restricted
     restrictedConversations = []
-    for convI, classifiedData in classified:
-        hasAny = False
-        for classifyName, classifyPrs in classifiedData:
-            for prYes, prNo in classifyPrs:
-                if prYes > prNo and prYes > 0.5:
-                    hasAny = True
-        if not hasAny:
-            restrictedConversations.append(convI, data[convI])
+    for convI, classifiedData in classified.items():
+        flags = defaultdict(lambda: [])
+        for classifyName, classifData in classifiedData.items():
+            if classifyName in knownKeys: # bonus aren't counted for restricted
+                thisValues = []
+                classifyPrs, convData = classifData
+                for i, (prYes, prNo) in enumerate(classifyPrs):
+                    flags[i].append(prYes > prNo and prYes > 0.5)
+        allTurnsPass = True
+        # for each turn, it must have at least one classify that passes
+        for _, flagArr in flags.items():
+            if not any(flags):
+                allTurnPass = False
+        # if at least one of our turns isn't classified, add us        
+        if not any(flags):
+            restrictedConversations.append((convI, data[convI]))
     
-    for classifyName in knownClassifications.items():
+    # get journals thing
+    with open("chonkers/journalsonbailed", "rb") as f:
+        journals = extractJournalEntries(cloudpickle.load(f))[0]
+    tokenizer = llm.get_tokenizer()
+    conversationsSubset = []
+    subsetIndices = set()
+    journalsOfConversations = defaultdict(lambda: {})
+    for conversationIndex, turnPrompt, bailPr, continuePr, turnJournal in journals:
+        if not conversationIndex in subsetIndices:
+            subsetIndices.add(conversationIndex)
+            conversationsSubset.append((conversationIndex, data[conversationIndex]))
+        journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
+    # sort by conversation index
+    conversationsSubset.sort(key=lambda x: x[0])
+
+    # count amount in each category
+    groupedByCategory = {}
+    for classifyName in knownClassifications.keys() | bonusClassifications.keys():
+        if classifyName in bonusClassifications.keys():
+            print("\nhelper:")
         numClassified = 0
-        for convI, classifiedData in classified:
-            hasAny = False
-            for classifyNameD, classifyPrs in classifiedData:
-                if classifyName == classifyNameD:
-                    for prYes, prNo in classifyPrs:
-                        if prYes > prNo and prYes > 0.5:
-                            hasAny = True
-            if hasAny:
+        membersOfThisCategory = []
+        for convI, classifiedData in classified.items():
+            items = []
+            for classifyName2, classifData in classifiedData.items():
+                classifyPrs, convData = classifData
+                conversation = [{"role": turn['role'], "content": turn['content']} for turn in data[conversationIndex]]
+                if classifyName == classifyName2:
+                    ind = 0
+                    piecesSoFar = []
+                    for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+                        piecesSoFar += conversationPieces
+                        if bailPr > continuePr and turnPrompt in journalsOfConversations[conversationIndex]:
+                            prYes, prNo = classifyPrs[ind]
+                            ind += 1
+                            if prYes > prNo and prYes > 0.5:
+                                items.append((prYes, prNo, convI, turnI, turnPrompt, piecesSoFar))
+            if len(items) > 0:
                 numClassified += 1
+                membersOfThisCategory.append(items)
+        groupedByCategory[classifyName] = membersOfThisCategory
         print(f"{classifyName} has {numClassified}/{len(classified)}={100*numClassified/float(len(classified))}%")
+    print("\n")
     print(f"{len(restrictedConversations)}/{len(classified)}={100*len(restrictedConversations)/float(len(classified))}% remaining")
-    return restrictedConversations
+
+
+    return restrictedConversations, groupedByCategory
     
+
+def writeRestrictedSubset(stuff, restrictedConversations):
+    llm, embeddingModel, bailPrs, data = stuff
+    # code to make clioqwenbailjournalsv2 (have regular clio ran on conversations, but include bail journals and bail prs in outputs)
+    print("Loading journals")
+    with open("chonkers/journalsonbailed", "rb") as f:
+        journals = extractJournalEntries(cloudpickle.load(f))[0]
+    
+    print("Making conversation subset")
+    tokenizer = llm.get_tokenizer()
+    conversationsSubset = []
+    subsetIndices = set()
+    journalsOfConversations = defaultdict(lambda: {})
+    for conversationIndex, turnPrompt, bailPr, continuePr, turnJournal in journals:
+        if not conversationIndex in subsetIndices:
+            subsetIndices.add(conversationIndex)
+            conversationsSubset.append((conversationIndex, data[conversationIndex]))
+        journalsOfConversations[conversationIndex][turnPrompt] = turnJournal
+    # sort by conversation index
+    conversationsSubset.sort(key=lambda x: x[0])
+    
+    # create the json data that sticks in the bailprs and bail journals
+    print("Generating output json with bail prs and journals")
+    jsonMap = {}
+    for conversationIndex, conversationData in conversationsSubset:
+        conversation = [{"role": turn['role'], "content": turn['content']} for turn in data[conversationIndex]]
+        bailJournals = journalsOfConversations[conversationIndex]
+        resultJson = []
+        for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            resultJson.extend(conversationPieces)
+            resultJson.append({"role": "pr", "content": f"{bailPr} {continuePr}"})
+            # add bail journal if it exists
+            if turnPrompt in bailJournals:
+                resultJson.append({"role": "bailJournal", "content": f"BAIL\n{bailJournals[turnPrompt]}"})
+        resultJson.append({"role": "conversationIndex", "content": str(conversationIndex)})
+        jsonMap[conversationIndex] = resultJson            
+
+    dataToJsonFunc = lambda conversationTuple: jsonMap[conversationTuple[0]]
+
+    # run clio
+    subsetClio = openclio.runClio(
+        data=restrictedConversations,
+        llm=llm,
+        embeddingModel=embeddingModel,
+        facets=openclio.mainFacets,
+        maxConversationTokens=maxConversationTokens,
+        outputDirectory="chonkers/qwenbaillessconversationsWithJournals",
+        htmlRoot="/modelwelfare/qwenbaillessconversationsWithJournals",
+        # since we store (originalConvI, conversationData), just return conversationData
+        dedupKeyFunc=lambda conversation: conversationToString(conversation[1], tokenizer=tokenizer, maxTokens=maxConversationTokens),
+        getConversationFunc=lambda conversationTuple: conversationTuple[1],
+        tokenizerArgs = {},
+        llmExtraInferenceArgs = {
+            "max_tokens": 1000,
+        },
+        hostWebui=False,
+        htmlDataToJsonFunc=dataToJsonFunc
+    )
 
 
 
@@ -431,7 +572,7 @@ Return either <classify> Yes </classify> or <classify> No </classify>.""" # spac
     
     yesToken = tokenizer.encode(" Yes")[0]
     noToken = tokenizer.encode(" No")[0]
-    def processOutput(conversationIndex, conversation, turnI, turnPrompt, conversationPieces, outputs):
+    def processOutput(conversationIndex, conversation, turnI, turnPrompt, conversationPieces, prevPieces, outputs):
         logprobs = outputs[0].logprobs[0]
         yesLogprob = logprobs[yesToken].logprob if yesToken in logprobs else -np.inf
         noLogprob = logprobs[noToken].logprob if noToken in logprobs else -np.inf
@@ -493,9 +634,12 @@ def runPromptsOnSubset(stuff, batchSize, promptGenFunc, processOutput):
         conversation =  [{"role": turn["role"], "content": turn["content"]} for turn in conversation]
         outputs = []
         ind = 0
+        prevPieces = []
         for (turnI, turnPrompt, conversationPieces, bailPr, continuePr) in getTurnPrompts(tokenizer, conversation, bailPrs=bailPrs[conversationIndex]):
+            prevPieces += conversationPieces
             if bailPr > continuePr and turnPrompt in journalsOfConversations[conversationIndex]:
-                outputs.append(processOutput(conversationIndex, conversation, turnI, turnPrompt, conversationPieces, convOutputs[ind]))
+                outputs.append(processOutput(conversationIndex, conversation, turnI, turnPrompt, conversationPieces, prevPieces, convOutputs[ind]))
+                ind += 1
         return (conversationIndex, conversation, outputs)
     
     return runBatched(
