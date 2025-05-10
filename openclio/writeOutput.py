@@ -28,54 +28,6 @@ def getNumLevels(output: OpenClioResults, facetI: int):
             return getDepthHelper(currentItem.children[0])+1
     return getDepthHelper(output.rootClusters[facetI][0])
 
-def encodeClusterAsJson(facetI: int, output: OpenClioResults, cluster: ConversationCluster, currentLevel: int, highestLevelInclusive: int, fileMap: Dict[Tuple[str, str], str], dataToJson: Callable[[Any], Dict[str, Any]]):
-    def encodeClusterJsonHelper(cluster: ConversationCluster, currentLevel: int, highestLevelInclusive: int):
-        # at the highest level, just store references to children via their files
-        if currentLevel >= highestLevelInclusive:
-            children = [{"numConvs": child.numConversations, "path": fileMap[child]} for child in cluster.children if child.numConversations > 0] if cluster.children is not None else [] 
-        else:
-            children = [encodeClusterJsonHelper(child, currentLevel=currentLevel+1, highestLevelInclusive=highestLevelInclusive) for child in cluster.children if child.numConversations > 0] if cluster.children is not None else [] 
-        res = {
-            "summary": cluster.summary,
-            "name": cluster.name,
-            "children": children,
-            "numConvs": cluster.numConversations,
-        }
-        if cluster.children is None and cluster.filteredIndices is not None:
-            # todo: add facet values
-            conversations = []
-            for conversationI in cluster.filteredIndices:
-                data = output.facetValues[conversationI]
-                facetValue = data.facetValues[facetI]
-                conversation = data.conversation
-                conversations.append({
-                    "facetValue": facetValue.value,
-                    "allFacetValues": [{"facet": value.facet.name, "value": value.value} for value in data.facetValues],
-                    "conversation": dataToJson(output.data[conversationI])
-                })
-            res["conversations"] = conversations
-        return res
-    return json.dumps(encodeClusterJsonHelper(cluster=cluster, currentLevel=currentLevel, highestLevelInclusive=highestLevelInclusive))
-
-def encodeLevels(facetI: int, output: OpenClioResults, lowerLevelInclusive: int, highestLevelInclusive: int, fileMap: Dict[Tuple[str, str], str], dataToJson: Callable[[Any], Dict[str, Any]]):
-    for cluster in getAllClustersAtLevel(facetI=facetI, output=output, level=lowerLevelInclusive):
-        if cluster.numConversations > 0:
-            yield cluster, encodeClusterAsJson(facetI=facetI, output=output, cluster=cluster, currentLevel=lowerLevelInclusive, highestLevelInclusive=highestLevelInclusive, fileMap=fileMap, dataToJson=dataToJson)
-
-def findLowestLevelThatKeepsSizeLessThanMaxSize(facetI: int, output: OpenClioResults, curLevel: int, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]]):
-    dummyFileMap = defaultdict(lambda: "aaaaaaaaaaaaaaaaaa"*5) # dummy file path
-    if curLevel == 0: # we are already at top level, just use that
-        return 0
-    # go curLevel-1, curLevel-2, ..., 0
-    for lowerLevel in range(max(0, curLevel-1), -1, -1):
-        for cluster, jsonData in encodeLevels(facetI, output, lowerLevel, curLevel, fileMap=dummyFileMap, dataToJson=dataToJson):
-            if len(jsonData) > maxSizePerFile:
-                # we went too far, use previous one
-                return min(curLevel, lowerLevel+1)
-    # we can encode everything, use 0
-    return 0
-
-
 # we want to gather stuff together until we reach maxSize
 def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], outputPath: str, htmlRoot: str, verbose: bool):
     fileMap = {}
