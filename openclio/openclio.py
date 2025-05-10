@@ -146,6 +146,8 @@ def runClio(facets: List[Facet],
         return res, True
     
     def getResults():
+        nonlocal data
+        nonlocal dependencyModified
         if cfg.dedupData:
             dedupKeyFunc = cfg.dedupKeyFunc
             if dedupKeyFunc is None:
