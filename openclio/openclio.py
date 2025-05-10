@@ -145,102 +145,102 @@ def runClio(facets: List[Facet],
             cloudpickle.dump(res, f)
         return res, True
     
-    
-    if cfg.dedupData:
-        dedupKeyFunc = cfg.dedupKeyFunc
-        if dedupKeyFunc is None:
-            if len(data) > 0 and type(data[0]) in [list, np.ndarray, pd.core.series.Series]:
-                # tokenize and truncate key func
-                tokenizer = llm.get_tokenizer()
-                cfg.print("Using default conversation dedup key func")
-                dedupKeyFunc = lambda conversation: conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
-            else:
-                # identity key func
-                cfg.print("Using identity key func")
-                dedupKeyFunc = lambda x: x
-        cfg.print("Deduping data")
-        data, dependencyModified = runIfNotExist("dedupedData.pkl", lambda:
-            dedup(data, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize, verbose=cfg.verbose),
-            dependencyModified=dependencyModified
-        )
-    
+    def getResults():
+        if cfg.dedupData:
+            dedupKeyFunc = cfg.dedupKeyFunc
+            if dedupKeyFunc is None:
+                if len(data) > 0 and type(data[0]) in [list, np.ndarray, pd.core.series.Series]:
+                    # tokenize and truncate key func
+                    tokenizer = llm.get_tokenizer()
+                    cfg.print("Using default conversation dedup key func")
+                    dedupKeyFunc = lambda conversation: conversationToString(conversation, tokenizer=tokenizer, maxTokens=cfg.maxConversationTokens)
+                else:
+                    # identity key func
+                    cfg.print("Using identity key func")
+                    dedupKeyFunc = lambda x: x
+            cfg.print("Deduping data")
+            data, dependencyModified = runIfNotExist("dedupedData.pkl", lambda:
+                dedup(data, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize, verbose=cfg.verbose),
+                dependencyModified=dependencyModified
+            )
+        
 
-    cfg.print("Getting facet values")
-    setSeed(cfg.seed) # doing this before each function call helps ensure reproducability if they resume
-    facetValues, dependencyModified = \
-        runIfNotExist("facetValues.pkl", lambda:
-            getFacetValues(
-                facets=facets, 
-                llm=llm,
-                data=data,
-                cfg=cfg
-            ),
-            dependencyModified=dependencyModified
-        )
-    
-    cfg.print("Getting facet value embeddings")
-    setSeed(cfg.seed)
-    facetValuesEmbeddings, dependencyModified = \
-        runIfNotExist("facetValuesEmbeddings.pkl", lambda:
-            getFacetValuesEmbeddings(
-                facets=facets,
-                facetValues=facetValues,
-                embeddingModel=embeddingModel,
-                cfg=cfg
-            ),
-            dependencyModified=dependencyModified
-        )
-    
-    cfg.print("Getting base clusters")
-    setSeed(cfg.seed)
-    baseClusters, dependencyModified = \
-        runIfNotExist("baseClusters.pkl", lambda:
-            getBaseClusters(
-                facets=facets,
-                llm=llm,
-                embeddingModel=embeddingModel,
-                facetValues=facetValues,
-                facetValuesEmbeddings=facetValuesEmbeddings,
-                cfg=cfg,
-                runIfNotExist=runIfNotExist,
-                dependencyModified=dependencyModified,
-            ),
-            dependencyModified=dependencyModified
-        )
+        cfg.print("Getting facet values")
+        setSeed(cfg.seed) # doing this before each function call helps ensure reproducability if they resume
+        facetValues, dependencyModified = \
+            runIfNotExist("facetValues.pkl", lambda:
+                getFacetValues(
+                    facets=facets, 
+                    llm=llm,
+                    data=data,
+                    cfg=cfg
+                ),
+                dependencyModified=dependencyModified
+            )
+        
+        cfg.print("Getting facet value embeddings")
+        setSeed(cfg.seed)
+        facetValuesEmbeddings, dependencyModified = \
+            runIfNotExist("facetValuesEmbeddings.pkl", lambda:
+                getFacetValuesEmbeddings(
+                    facets=facets,
+                    facetValues=facetValues,
+                    embeddingModel=embeddingModel,
+                    cfg=cfg
+                ),
+                dependencyModified=dependencyModified
+            )
+        
+        cfg.print("Getting base clusters")
+        setSeed(cfg.seed)
+        baseClusters, dependencyModified = \
+            runIfNotExist("baseClusters.pkl", lambda:
+                getBaseClusters(
+                    facets=facets,
+                    llm=llm,
+                    embeddingModel=embeddingModel,
+                    facetValues=facetValues,
+                    facetValuesEmbeddings=facetValuesEmbeddings,
+                    cfg=cfg,
+                    runIfNotExist=runIfNotExist,
+                    dependencyModified=dependencyModified,
+                ),
+                dependencyModified=dependencyModified
+            )
 
-    cfg.print("Getting higher level clusters")
-    setSeed(cfg.seed)
-    rootClusters, dependencyModified = \
-        runIfNotExist("rootClusters.pkl", lambda:
-            getHierarchy(
-                facets=facets,
-                llm=llm,
-                embeddingModel=embeddingModel,
-                baseClusters=baseClusters,
-                cfg=cfg
-            ),
-            dependencyModified=dependencyModified
-        )
-    
-    cfg.print("Saving results")
-    output, dependencyModified = \
-        runIfNotExist("results.pkl", lambda:
-            OpenClioResults(
-                facets=facets,
-                facetValues=facetValues,
-                facetValuesEmbeddings=facetValuesEmbeddings,
-                baseClusters=baseClusters,
-                rootClusters=rootClusters,
-                data=data,
-                cfg=cfg
-            ),
-            dependencyModified=dependencyModified
+        cfg.print("Getting higher level clusters")
+        setSeed(cfg.seed)
+        rootClusters, dependencyModified = \
+            runIfNotExist("rootClusters.pkl", lambda:
+                getHierarchy(
+                    facets=facets,
+                    llm=llm,
+                    embeddingModel=embeddingModel,
+                    baseClusters=baseClusters,
+                    cfg=cfg
+                ),
+                dependencyModified=dependencyModified
+            )
+        
+        cfg.print("Saving results")
+        return OpenClioResults(
+            facets=facets,
+            facetValues=facetValues,
+            facetValuesEmbeddings=facetValuesEmbeddings,
+            baseClusters=baseClusters,
+            rootClusters=rootClusters,
+            data=data,
+            cfg=cfg
         )
 
+    output, dependencyModified = runIfNotExist("results.pkl", getResults,
+        dependencyModified=dependencyModified
+    )
     htmlOutputPath = os.path.join(outputDirectory, htmlRoot.strip()[1:] if htmlRoot.strip().startswith("/") else htmlRoot)
     cfg.print(f"Outputting to webpage at path {htmlOutputPath}")
     # clear old outputs
     if not htmlRoot in ["/", ""] and os.path.exists(htmlOutputPath):
+        cfg.print(f"Removing old outputs at {htmlOutputPath}")
         shutil.rmtree(htmlOutputPath)
     Path(htmlOutputPath).mkdir(parents=True, exist_ok=True)
     convertOutputToWebpage(

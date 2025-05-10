@@ -75,6 +75,117 @@ def findLowestLevelThatKeepsSizeLessThanMaxSize(facetI: int, output: OpenClioRes
     # we can encode everything, use 0
     return 0
 
+
+# we want to gather stuff together until we reach maxSize
+def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], outputPath: str, htmlRoot: str, verbose: bool):
+    fileMap = {}
+
+    facet = output.facets[facetI]
+
+    facetJson = {
+        "name": facet.name,
+        "question": facet.question,
+        "prefill": facet.prefill,
+        "summaryCriteria": "" if facet.summaryCriteria is None else facet.summaryCriteria,
+        "numeric": [] if facet.numeric is None else list(facet.numeric)
+    }
+    facetDir = Path(outputPath) / facet.name
+    facetDir.mkdir(parents=True, exist_ok=True)
+    facetHtmlDir = Path(htmlRoot) / facet.name
+
+    def encodeConversations(filteredIndices):
+        conversations = []
+        for conversationI in filteredIndices:
+            data = output.facetValues[conversationI]
+            facetValue = data.facetValues[facetI]
+            conversation = data.conversation
+            conversations.append({
+                "facetValue": facetValue.value,
+                "allFacetValues": [{"facet": value.facet.name, "value": value.value} for value in data.facetValues],
+                "conversation": dataToJson(output.data[conversationI])
+            })
+        return conversations
+    
+    def resetFlags(cluster: ConversationCluster):
+        cluster.stored = False
+        [clearStoredFlags(child) for child in cluster.children] if cluster.children is not None else None
+
+    def removeFlags(cluster: ConversationCluster):
+        del cluster.stored
+        [removeFlags(child) for child in cluster.children] if cluster.children is not None else None
+        
+    
+    # first pass, store all sizes recursively
+    def storeSizes(cluster: ConversationCluster):
+        if cluster.stored:
+            return len(fileMap[cluster]) # dummy size for size of file path
+        totalSize = 0
+        if cluster.children is None:
+            # todo: add facet values
+            if cluster.filteredIndices is not None:
+                totalSize += len(json.dumps(encodeConversations(cluster.filteredIndices)))
+        else:
+            totalSize += sum([storeSizes(x) for x in cluster.children]) if cluster.children is not None else 0
+        
+        totalSize += len(json.dumps({
+            "summary": cluster.summary,
+            "name": cluster.name,
+            "numConvs": cluster.numConversations,
+        }))
+        cluster.totalSize = totalSize
+        return totalSize
+    
+    def getClusterJson(cluster: ConversationCluster):
+        if cluster.stored:
+            return {"numConvs": cluster.numConversations, "path": fileMap[cluster]}
+        resJson = {
+            "summary": cluster.summary,
+            "name": cluster.name,
+            "numConvs": cluster.numConversations,
+        }
+        if cluster.children is None and cluster.filteredIndices is not None:
+            resJson["conversations"] = encodeConversations(cluster.filteredIndices)
+        elif cluster.children is not None:
+            resJson["children"] = [getClusterJson(child) for child in cluster.children]
+        return resJson
+            
+    curIndex = 0
+    def storeIfNotTooLarge(cluster: ConversationCluster):
+        if cluster.stored: raise ValueError("We already stored this cluster")
+        allChildrenStored = all([child.stored for child in cluster.children]) if not cluster.children is None else True
+        # store if all of our children have already been stored (no further place to expand, this is as small as we get)
+        # or if size including children is less than maxSize
+        if cluster.totalSize < maxSizePerFile or allChildrenStored:
+            nonlocal curIndex
+            jsonData = getClusterJson(cluster)
+            cluster.stored = True
+            outputPathForCluster = facetDir / f"data{curIndex}.json"
+            htmlPathForCluster = facetHtmlDir / f"data{curIndex}.json"
+            curIndex += 1
+            with open(outputPathForCluster, "w") as f:
+                f.write(jsonData)
+            if verbose:
+                print(outputPathForCluster)
+            fileMap[cluster] = htmlPathForCluster
+        # otherwise, continue to recurse until we can
+        else:
+            if not cluster.children is None:
+                for child in cluster.children:
+                    storeIfNotTooLarge(child)
+
+    rootClusterHtmlPaths = []
+    for rootCluster in output.rootClusters[facetI]:
+        clearStoredFlags(rootCluster)
+        # repeat reductions until we finally store root level
+        while not rootCluster.stored:
+            storeSizes(rootCluster)
+            storeIfNotTooLarge(rootCluster)
+        # remove the flags so they don't stick around and waste memory
+        removeFlags(rootCluster)
+
+        rootClusterHtmlPaths.append(fileMap[rootCluster])
+    return {"facet": facetJson, "hierarchy": rootClusterHtmlPaths}
+
 def storeConversationCounts(output: OpenClioResults):
     for rootClusters in output.rootClusters:
         if not rootClusters is None:
@@ -141,38 +252,9 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
     rootJson = []
     for facetI, facet in enumerate(output.facets):
         if verbose: print(f"facet {facet.name}")
-        facetJson = {
-            "name": facet.name,
-            "question": facet.question,
-            "prefill": facet.prefill,
-            "summaryCriteria": "" if facet.summaryCriteria is None else facet.summaryCriteria,
-            "numeric": [] if facet.numeric is None else list(facet.numeric)
-        }
         if shouldMakeFacetClusters(facet):
-            facetTargetDir = Path(targetDir) / facet.name
-            facetTargetDir.mkdir(parents=True, exist_ok=True)
-
-            globalInd = 0
-            rootItems = []
-
-            curLevel = numLevels-1
-            fileMap = {}
-            while curLevel >= 0:
-                lowerLevel = findLowestLevelThatKeepsSizeLessThanMaxSize(facetI=facetI, output=output, curLevel=curLevel, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson)
-                if verbose: print(f"Level {lowerLevel} to {curLevel}")
-                facetTargetDirLevels = facetTargetDir / f"levels{lowerLevel}{curLevel}"
-                facetTargetDirLevels.mkdir(parents=True, exist_ok=True)
-                for cluster, jsonData in encodeLevels(facetI=facetI, output=output, lowerLevelInclusive=lowerLevel, highestLevelInclusive=curLevel, fileMap=fileMap, dataToJson=dataToJson):
-                    outputPath = facetTargetDirLevels / f"data{globalInd}.json"
-                    with open(outputPath, "w") as f:
-                        f.write(jsonData)
-                    htmlPath = os.path.join(rootHtmlPath, facet.name, f"levels{lowerLevel}{curLevel}", f"data{globalInd}.json")
-                    fileMap[cluster] = htmlPath
-                    if lowerLevel == 0:
-                        rootItems.append({"path": htmlPath, "numConvs": cluster.numConversations})
-                    globalInd += 1
-                curLevel = lowerLevel - 1
-            rootJson.append({"facet": facetJson, "hierarchy": rootItems})
+            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, verbose=verbose)
+            rootJson.append(facetJson)
     with open(os.path.join(targetDir, "rootObjects.json"), "w") as f:
         json.dump(rootJson, f)
 
