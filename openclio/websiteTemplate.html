@@ -85,11 +85,19 @@ const $=(t,a={},...k)=>{
 const spinner=()=>$('span',{class:'spinner',title:'Loading…'});
 const fetchJson=u=>fetch(u,{cache:'reload'}).then(r=>{if(!r.ok)throw Error(r.status);
   // we used compressed jsons
-  const buf  = new Uint8Array(r.arrayBuffer());
-  const text = new TextDecoder().decode(pako.inflate(buf));
-  const data = JSON.parse(text);
-  return data
+  return r.json();
   });
+async function fetchJsonGz(url) {
+  const res = await fetch(url, { cache: 'reload' });
+  if (!res.ok) throw new Error(res.status);
+
+  const ab   = await res.arrayBuffer();     // wait here
+  const buf  = new Uint8Array(ab);
+  const text = pako.ungzip(buf, { to: 'string' });
+
+
+  return JSON.parse(text);
+}
 const join=p=>p.join('.'), split=s=>s.split('.');
 const getNum=i=>i?.numConversations??i?.numConvs??0;
 const isPlaceholder=i=>typeof i==='object'&&i!==null&&'path'in i&&!('children'in i);
@@ -147,7 +155,7 @@ function buildPlaceholder(ph,pathArr,siblingTotal){
   const load=async()=>{
     if(li.dataset.loaded) return;
     li.dataset.loaded=1; loadedPlaceholders.add(pathStr);
-    const data=await fetchJson(url);
+    const data=await fetchJsonGz(url);
     li.replaceWith(
       (data.children||data.conversations)
         ? buildNode(data,pathArr,siblingTotal)
