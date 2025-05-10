@@ -83,12 +83,14 @@ const $=(t,a={},...k)=>{
   return e;
 };
 const spinner=()=>$('span',{class:'spinner',title:'Loading…'});
-const fetchJson=u=>fetch(u,{cache:'reload'}).then(r=>{if(!r.ok)throw Error(r.status);
+async function fetchJson(u) {
+  const res = await fetch(u,{cache:'reload'});
+  if (!res.ok) throw new Error(res.status);
   // we used compressed jsons
-  return r.json();
-  });
+  return res.json();
+}
 async function fetchJsonGz(url) {
-  const res = await fetch(url, { cache: 'reload' });
+  const res = await fetch("https://raw.githubusercontent.com/Phylliida/OpenClioWildchatResults/refs/heads/main" + url);
   if (!res.ok) throw new Error(res.status);
 
   const ab   = await res.arrayBuffer();     // wait here
@@ -106,7 +108,7 @@ const sortByCount=a=>[...a].sort((p,q)=>count(q)-count(p));
 const facetCount=f=>Array.isArray(f.hierarchy)?f.hierarchy.reduce((s,c)=>s+count(c),0):0;
 
 const ROOT="ROOTOBJECTSJSON";
-const pathMap=new Map(), loadedPlaceholders=new Set();
+const pathMap=new Map(), loadedPlaceholders=[];
 let openConvHash=null;
 
 /* ───────── root build ───────── */
@@ -154,7 +156,8 @@ function buildPlaceholder(ph,pathArr,siblingTotal){
   const li=$('li',{'data-url':url,'data-path':pathStr},spinner());
   const load=async()=>{
     if(li.dataset.loaded) return;
-    li.dataset.loaded=1; loadedPlaceholders.add(pathStr);
+    li.dataset.loaded=1;
+    if (!loadedPlaceholders.includes(pathStr)) loadedPlaceholders.push(pathStr);
     const data=await fetchJsonGz(url);
     li.replaceWith(
       (data.children||data.conversations)
@@ -310,8 +313,9 @@ async function restoreFromHash(){
   });
 
   for(const p of plSegs){
-    loadedPlaceholders.add(p);
+    loadedPlaceholders.push(p);
     const li=document.querySelector(`li[data-path="${CSS.escape(p)}"]`);
+    console.log(li);
     if(li?.__load) await li.__load();
   }
 
