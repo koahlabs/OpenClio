@@ -3,6 +3,7 @@ import os
 import json
 from collections import defaultdict
 from pathlib import Path
+import gzip
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 
 # 0 is root/highest level
@@ -29,7 +30,7 @@ def getNumLevels(output: OpenClioResults, facetI: int):
     return getDepthHelper(output.rootClusters[facetI][0])
 
 # we want to gather stuff together until we reach maxSize
-def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], outputPath: str, htmlRoot: str, verbose: bool):
+def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool):
     fileMap = {}
 
     facet = output.facets[facetI]
@@ -41,9 +42,9 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
         "summaryCriteria": "" if facet.summaryCriteria is None else facet.summaryCriteria,
         "numeric": [] if facet.numeric is None else list(facet.numeric)
     }
-    facetDir = Path(outputPath) / facet.name
+    facetDir = Path(targetDir) / facet.name
     facetDir.mkdir(parents=True, exist_ok=True)
-    facetHtmlDir = Path(htmlRoot) / facet.name
+    facetHtmlDir = Path(rootHtmlPath) / facet.name
 
     def encodeConversations(filteredIndices):
         conversations = []
@@ -58,13 +59,14 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
             })
         return conversations
     
-    def resetFlags(cluster: ConversationCluster):
+    def resetStoredFlags(cluster: ConversationCluster):
         cluster.stored = False
-        [clearStoredFlags(child) for child in cluster.children] if cluster.children is not None else None
+        [resetStoredFlags(child) for child in cluster.children] if cluster.children is not None else None
 
-    def removeFlags(cluster: ConversationCluster):
+    def removeStoredFlagsAndSizes(cluster: ConversationCluster):
         del cluster.stored
-        [removeFlags(child) for child in cluster.children] if cluster.children is not None else None
+        del cluster.totalSize
+        [removeStoredFlagsAndSizes(child) for child in cluster.children] if cluster.children is not None else None
         
     
     # first pass, store all sizes recursively
@@ -111,14 +113,14 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
             nonlocal curIndex
             jsonData = getClusterJson(cluster)
             cluster.stored = True
-            outputPathForCluster = facetDir / f"data{curIndex}.json"
-            htmlPathForCluster = facetHtmlDir / f"data{curIndex}.json"
+            outputPathForCluster = facetDir / f"data{curIndex}.json.gz"
+            htmlPathForCluster = facetHtmlDir / f"data{curIndex}.json.gz"
             curIndex += 1
-            with open(outputPathForCluster, "w") as f:
-                f.write(jsonData)
+            with gzip.open(outputPathForCluster, "wt", encoding="utf-8") as gz:
+                json.dump(jsonData, gz, separators=(",", ":"))
             if verbose:
                 print(outputPathForCluster)
-            fileMap[cluster] = htmlPathForCluster
+            fileMap[cluster] = str(htmlPathForCluster)
         # otherwise, continue to recurse until we can
         else:
             if not cluster.children is None:
@@ -126,16 +128,18 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
                     storeIfNotTooLarge(child)
 
     rootClusterHtmlPaths = []
-    for rootCluster in output.rootClusters[facetI]:
-        clearStoredFlags(rootCluster)
+    for clusterI, rootCluster in enumerate(output.rootClusters[facetI]):
+        resetStoredFlags(rootCluster)
         # repeat reductions until we finally store root level
         while not rootCluster.stored:
             storeSizes(rootCluster)
             storeIfNotTooLarge(rootCluster)
         # remove the flags so they don't stick around and waste memory
-        removeFlags(rootCluster)
+        removeStoredFlagsAndSizes(rootCluster)
 
-        rootClusterHtmlPaths.append(fileMap[rootCluster])
+        rootClusterHtmlPaths.append({"numConvs": rootCluster.numConversations, "path": fileMap[rootCluster]})
+
+        print(f"Finished cluster {clusterI+1}/{len(output.rootClusters[facetI])}")
     return {"facet": facetJson, "hierarchy": rootClusterHtmlPaths}
 
 def storeConversationCounts(output: OpenClioResults):
@@ -205,7 +209,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
     for facetI, facet in enumerate(output.facets):
         if verbose: print(f"facet {facet.name}")
         if shouldMakeFacetClusters(facet):
-            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, verbose=verbose)
+            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose)
             rootJson.append(facetJson)
     with open(os.path.join(targetDir, "rootObjects.json"), "w") as f:
         json.dump(rootJson, f)

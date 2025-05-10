@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Chat-data browser</title>
-
+<script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
@@ -83,7 +83,13 @@ const $=(t,a={},...k)=>{
   return e;
 };
 const spinner=()=>$('span',{class:'spinner',title:'Loading…'});
-const fetchJson=u=>fetch(u,{cache:'reload'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json();});
+const fetchJson=u=>fetch(u,{cache:'reload'}).then(r=>{if(!r.ok)throw Error(r.status);
+  // we used compressed jsons
+  const buf  = new Uint8Array(r.arrayBuffer());
+  const text = new TextDecoder().decode(pako.inflate(buf));
+  const data = JSON.parse(text);
+  return data
+  });
 const join=p=>p.join('.'), split=s=>s.split('.');
 const getNum=i=>i?.numConversations??i?.numConvs??0;
 const isPlaceholder=i=>typeof i==='object'&&i!==null&&'path'in i&&!('children'in i);
