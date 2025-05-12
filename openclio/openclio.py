@@ -849,7 +849,7 @@ def deduplicateByEmbeddingsAndMergeSources(
     dist = 1.0 - sim
 
     # 3. Boolean adjacency under threshold (no self-loops)
-    mask = (dist <= tau) & ~np.eye(len(values), dtype=bool)
+    mask = (dist <= tau) & ~np.eye(len(valuesAsStr), dtype=bool)
 
     # 4. Connected components (single-link duplicate sets)
     components = connectedComponentsFromMask(mask)
@@ -858,7 +858,7 @@ def deduplicateByEmbeddingsAndMergeSources(
     representatives = []
     for comp in components:
         if comp.size == 1:
-            representatives.append(values[comp[0]])
+            representatives.append(valuesAndSources[comp[0]])
         else:
             # union all members of connected component
             sourcesUnion = set()
@@ -867,7 +867,7 @@ def deduplicateByEmbeddingsAndMergeSources(
                 sourcesUnion |= set(sources)
             # use medoid element as representative
             medoid_idx = medoidFromEmbeddings(comp, emb)
-            representatives.append((values[medoid_idx], sorted(list(sourcesUnion))))
+            representatives.append((valuesAsStr[medoid_idx], sorted(list(sourcesUnion))))
 
     return representatives
 
