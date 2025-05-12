@@ -144,7 +144,7 @@ Put your answer in this format:
 
 You can see the code [here](https://github.com/Phylliida/OpenClio/blob/main/openclio/prompts.py#L9) it's fairly simple.
 
-In genreal, your function should just return the string that is then later passed into llm.generate.
+In general, your function should just return the string that is then later passed into llm.generate.
 
 Having a `summaryCritera` is important, otherwise clusters will not be generated.
 
