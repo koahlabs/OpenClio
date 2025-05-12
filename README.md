@@ -27,3 +27,11 @@ clio.runClio(facets=clio.mainFacets, llm=llm, embeddingModel=embeddingModel, dat
 That'll provide a link for you, go there, and you should see your cleo outputs! You can also put the files into your own website.
 
 As you browse, the hash of the website will be modified. This lets you share specific conversations or tree states via URL.
+
+![Tree view](url-or-path "optional title")
+
+![Conversation View](url-or-path "optional title")
+
+
+To see what other parameters you can pass to runClio, see the docs for [https://github.com/Phylliida/OpenClio/blob/main/project-wiki/opencliotypes.md#opencliotypes.OpenClioConfig](OpenClioConfig) (any of these fields can be passed into runClio and they will be [https://github.com/Phylliida/OpenClio/blob/main/openclio/openclio.py#L118](used)).
+
