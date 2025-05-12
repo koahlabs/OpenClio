@@ -114,22 +114,28 @@ There's a lot of params here. General guide:
 Beyond that, the default values here are fine and will adapt to your data size.
 
 If you want to modify stuff more, the first place to start is things that change how the hierarchy is shaped (I include here their default values):
-minTopLevelSize=5 
-    Once the current highest level of the hierarchy gets <= this many clusters we'll stop making higher levels.
-    You can increase this if you want a wider hierarchy at the top level.
-nBaseClustersFunc=lambda n: n//10
-    You can change 10 to some larger value if you want more items in each base cluster (10 is number of data points in each base-level cluster, on average)
-nDesiredHigherLevelNamesPerClusterFunc=lambda n: n//2
-    2 is your "branching factor" of the hierarchy. Higher values will result in more children at each level (and thus, a more shallow hierarchy)
+- minTopLevelSize=5 
+  - Once the current highest level of the hierarchy gets <= this many clusters we'll stop making higher levels.
+  - You can increase this if you want a wider hierarchy at the top level.
+- nBaseClustersFunc=lambda n: n//10
+  - You can change 10 to some larger value if you want more items in each base cluster (10 is number of data points in each base-level cluster, on average)
+- nDesiredHigherLevelNamesPerClusterFunc=lambda n: n//2
+  - 2 is your "branching factor" of the hierarchy. Higher values will result in more children at each level (and thus, a more shallow hierarchy)
 
 If each data point doesn't look like a conversation ([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey :3"}, ...]), you can modify
+
 dedupKeyFunc = lambda dataPoint: <return some value here you can use as a key for deduplicating your data>
+
 and
+
 getConversationFunc = lambda dataPoint: <return some value here that looks like a conversation>
 
 If they don't look like a conversation at all, you can't use facets=openclio.mainFacets.
+
 However you can use facets=openclio.genericSummaryFacets or make your own facets.
+
 If you are making your own facets or using genericSummaryFacets, you can just leave getConversationFunc as it's default value of lambda data: data
+
 And it'll pass the data to your facet's getFacetPrompt function (openclio.genericSummaryFacets just calls str(data))
 
 <a id="opencliotypes.OpenClioConfig.seed"></a>
