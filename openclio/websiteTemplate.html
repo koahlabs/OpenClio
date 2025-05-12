@@ -89,9 +89,23 @@ async function fetchJson(u) {
   // we used compressed jsons
   return res.json();
 }
+
+function sleep(seconds) {
+  return new Promise(resolve => setTimeout(resolve, seconds * 1000));
+}
+    
 async function fetchJsonGz(url) {
-  const res = await fetch("https://raw.githubusercontent.com/Phylliida/OpenClioWildchatResults/refs/heads/main" + url);
-  if (!res.ok) throw new Error(res.status);
+  var res;
+  var numRetries = 5;
+  for (var retryIter = 0; retryIter < numRetries; retryIter++) {
+    res = await fetch(url,{cache:'reload'});
+    if (res.ok) break;
+    if (retryIter == numRetries-1) {
+        throw new Error(res.status);
+    } else {
+        await sleep(1); // rate limit
+    }
+  }
 
   const ab   = await res.arrayBuffer();     // wait here
   const buf  = new Uint8Array(ab);
@@ -108,7 +122,7 @@ const sortByCount=a=>[...a].sort((p,q)=>count(q)-count(p));
 const facetCount=f=>Array.isArray(f.hierarchy)?f.hierarchy.reduce((s,c)=>s+count(c),0):0;
 
 const ROOT="ROOTOBJECTSJSON";
-const pathMap=new Map(), loadedPlaceholders=[];
+const pathMap=new Map();
 let openConvHash=null;
 
 /* ───────── root build ───────── */
@@ -134,9 +148,10 @@ function buildFacets(raw){
   restoreFromHash();
 }
 
+
 /* ───────── builders ───────── */
-function buildNode(item,pathArr,siblingTotal){
-  if(isPlaceholder(item)) return buildPlaceholder(item,pathArr,siblingTotal);
+async function buildNode(item,pathArr,siblingTotal){
+  if(isPlaceholder(item)) return await buildPlaceholder(item,pathArr,siblingTotal);
   const p=join(pathArr);
   const details=$('details',{}); pathMap.set(p,details);
   const own=count(item), pct=siblingTotal?Math.round(own*100/siblingTotal):100;
@@ -151,23 +166,10 @@ function buildNode(item,pathArr,siblingTotal){
   details.addEventListener('toggle',handleToggle);
   return $('li',{},details);
 }
-function buildPlaceholder(ph,pathArr,siblingTotal){
+async function buildPlaceholder(ph,pathArr,siblingTotal){
   const url=ph.path, pathStr=join(pathArr);
-  const li=$('li',{'data-url':url,'data-path':pathStr},spinner());
-  const load=async()=>{
-    if(li.dataset.loaded) return;
-    li.dataset.loaded=1;
-    if (!loadedPlaceholders.includes(pathStr)) loadedPlaceholders.push(pathStr);
-    const data=await fetchJsonGz(url);
-    li.replaceWith(
-      (data.children||data.conversations)
-        ? buildNode(data,pathArr,siblingTotal)
-        : buildLeaf(url,data));
-    updateHash();
-  };
-  li.__load=load;
-  new IntersectionObserver(([e],o)=>{if(e.isIntersecting){load().then(()=>o.disconnect());}}).observe(li);
-  return li;
+  const data=await fetchJsonGz(url);
+  return (data.children||data.conversations) ?  await buildNode(data,pathArr,siblingTotal) : buildLeaf(url,data);
 }
 function buildLeaf(url,data){
   const d=$('details',{},$('summary',{},url.split('/').pop()));
@@ -176,16 +178,30 @@ function buildLeaf(url,data){
 }
 
 /* ───────── toggle handler ───────── */
-function handleToggle(e){
+async function handleToggle(e){
   const det=e.currentTarget;
   const parentPath=join(det.__pathArr);
+  console.log("handling toggle " + parentPath);
   if(det.open){
     if(!det.__built && det.__childrenData){
       const childTotal=det.__childrenData.reduce((s,i)=>s+count(i),0);
       const ul=$('ul',{class:'tree'});
-      det.__childrenData.forEach((ch,i)=>ul.appendChild(
-        buildNode(ch,[...det.__pathArr,i],childTotal)));
       det.appendChild(ul);
+      for (var i in det.__childrenData) {
+        var ch = det.__childrenData[i];
+        var spinnerChild = "";
+        if (isPlaceholder(ch)) {
+            spinnerChild = $('li',{},spinner());
+            ul.appendChild(spinnerChild);
+        }
+        var childNode = await buildNode(ch,[...det.__pathArr,i],childTotal);
+        if (isPlaceholder(ch)) {
+            spinnerChild.replaceWith(childNode);
+        }
+        else {
+            ul.appendChild(childNode);
+        }
+      }
       det.__built=true;
     }
     if(det.__convs && !det.__convsBuilt){
@@ -259,15 +275,31 @@ function mdToHtml(t=''){
   return h.replace(/\n/g,'<br>');
 }
 
+
+var curHash = "";
+
+window.addEventListener("hashchange", function(event) {
+  if (window.location.hash != curHash && modifyHashAllowed) {
+    console.log("Hash modified!");
+    console.log(curHash);
+    console.log(window.location.hash);
+    restoreFromHash().then(() => {
+        curHash = window.location.hash;
+    });
+  }
+});
+
 /* ───────── hash sync ───────── */
 function updateHash(){
   if(!modifyHashAllowed)return;
   const open=[...pathMap.entries()].filter(([,d])=>d.open).map(([p])=>p);
-  const loaded=[...loadedPlaceholders].map(p=>'p!'+p);
   if(openConvHash)open.push(openConvHash);
-  hashStr = [...open,...loaded].join(',');
+  hashStr = [...open].join(',');
   const compressedBase64 = LZUTF8.encodeBase64(LZUTF8.compress(hashStr));
-  window.location.hash = encodeURIComponent(compressedBase64);
+  curHash = "#" + encodeURIComponent(compressedBase64);
+  window.location.hash = curHash;
+  console.log("Updated hash to: " + curHash);
+  console.log(hashStr);
 }
 let modifyHashAllowed=true;
 
@@ -285,14 +317,15 @@ async function expandPath(pathStr){
     }
     if(det && !det.open){
       det.open=true;
-      handleToggle({currentTarget:det});
+      await handleToggle({currentTarget:det});
     }
   }
 }
 
 async function restoreFromHash(){
   modifyHashAllowed=false;
-  hashStr = location.hash
+  console.log("restoring from hash");
+  hashStr = window.location.hash;
   if (hashStr.length > 0) {
     try {
       hashStr = decodeURIComponent(hashStr.substring(1)) // remove #
@@ -302,22 +335,20 @@ async function restoreFromHash(){
       hashStr = ""
     }
   }
+  curHash = window.location.hash;
 
   const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
   const convSeg=segs.find(s=>s.startsWith('c!'));
-  const plSegs=segs.filter(s=>s.startsWith('p!')).map(s=>s.slice(2));
+  console.log("segs");
+  console.log(segs);
+  console.log("convSegs");
+  console.log(convSeg);
 
   const catSegs=[], convListSegs=[];
-  segs.filter(s=>s && !s.startsWith('p!') && s!==convSeg).forEach(p=>{
+  segs.filter(s=>s && s!==convSeg).forEach(p=>{
     p.endsWith('$c')?convListSegs.push(p):catSegs.push(p);
   });
 
-  for(const p of plSegs){
-    loadedPlaceholders.push(p);
-    const li=document.querySelector(`li[data-path="${CSS.escape(p)}"]`);
-    console.log(li);
-    if(li?.__load) await li.__load();
-  }
 
   for(const p of [...catSegs].sort((a,b)=>a.split('.').length-b.split('.').length)){
     await expandPath(p);
@@ -334,7 +365,6 @@ async function restoreFromHash(){
     const det=pathMap.get(path);
     if(det && det.__convs) openConversation(det.__convs[+idx],split(path),+idx);
   }else closeConversation();
-
   modifyHashAllowed=true;
 }
 
