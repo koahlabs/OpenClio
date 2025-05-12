@@ -51,13 +51,14 @@ Clio extracts facets from each conversation, then for some of those facets it ge
 Once you are done with this, see convertOutputToJsonChunks
 
 Keyword arguments:
-facets -- The facets we will extract from each conversation. You can use facets=openclio.mainFacets to use the facets from the paper.
-llm -- The llm that is used to extract facets and cluster data. This should be a vllm.LLM instance
-embeddingModel -- The embedding model used for clustering data (and a few other things). This should be a SentenceTransformer instance
-data -- The conversations we are running clio on. These should be formatted like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi :3"},...] (see OpenClioConfig in opencliotypes.py if your data isn't formatted like this)
-outputDirectory -- The directory path where we store checkpoints/outputs
-htmlRoot -- The path where the visuals will be stored on your website. For example, "/opencliooutputs"
-cfg -- Optional, an instance of openclio.OpenClioConfig, this lets you modify some of openclio's settings. Look at the comments for what individual fields mean.
+- facets -- The facets we will extract from each conversation. You can use facets=openclio.mainFacets to use the facets from the paper.
+- llm -- The llm that is used to extract facets and cluster data. This should be a vllm.LLM instance
+- embeddingModel -- The embedding model used for clustering data (and a few other things). This should be a SentenceTransformer instance
+- data -- The conversations we are running clio on. These should be formatted like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi :3"},...] (see OpenClioConfig in opencliotypes.py if your data isn't formatted like this)
+- outputDirectory -- The directory path where we store checkpoints/outputs
+- htmlRoot -- The path where the visuals will be stored on your website. For example, "/opencliooutputs"
+- cfg -- Optional, an instance of openclio.OpenClioConfig, this lets you modify some of openclio's settings. Look at the comments for what individual fields mean.
+
 Any extra args you provide will be assigned to your OpenClioConfig
 
 **Returns**:
