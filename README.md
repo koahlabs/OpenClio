@@ -154,5 +154,5 @@ Having a `summaryCritera` is important, otherwise clusters will not be generated
 
 ## Related Work and Citations
 
-[Kura](https://github.com/ivanleomk/kura) is a seperate implementation of some parts of Clio.
-[Wildchat](https://wildchat.allen.ai/) is the data I used when testing/on that website.
+- [Kura](https://github.com/ivanleomk/kura) is a seperate implementation of some parts of Clio.
+- [Wildchat](https://wildchat.allen.ai/) is the data I used when testing/on that website.
