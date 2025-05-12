@@ -478,7 +478,7 @@ def getHierarchy(
                 # fall back to dedup based on embedding (usually this means model got stuck in a loop, and it's better we ignore its outputs)
                 if len(extractedOptions) == 0:
                     # no dedup extracted, falling back to dedup based on embedding 
-                    extractedOptions = deduplicateByEmbeddings([cat for (cat, sources) in higherCategoriesInNeighborhood], embeddingModel=embeddingModel, tau=0.1)
+                    extractedOptions = deduplicateByEmbeddingsAndMergeSources(valuesAndSources=higherCategoriesInNeighborhood, embeddingModel=embeddingModel, tau=0.1)
                 return [(removePunctuation(output).strip(), allSources) for output in extractedOptions]
 
 
@@ -496,11 +496,10 @@ def getHierarchy(
             )
 
             # also just dedup by embeddings as an extra check, as the deduplicateByEmbeddings above can add too many extras because categories overlap
-            dedupedCategories = deduplicateByEmbeddings(
-                values=dedupedCategories,
+            dedupedCategories = deduplicateByEmbeddingsAndMergeSources(
+                valuesAndSources=dedupedCategories,
                 embeddingModel=embeddingModel,
                 tau=0.1,
-                valueMap=lambda x: x[0]
             )
             
             cfg.print(f"Got {len(dedupedCategories)} deduped higher categories")
@@ -826,6 +825,51 @@ def medoidFromEmbeddings(indices: np.ndarray,
     sim = cosine_similarity(sub)              # |C| × |C|
     distSums = (1.0 - sim).sum(axis=1)
     return indices[int(np.argmin(distSums))] # global index
+
+
+def deduplicateByEmbeddingsAndMergeSources(
+    valuesAndSources: List[Tuple[str, List[int]]],
+    embeddingModel: SentenceTransformer,
+    tau: float = 0.15,          # distance threshold (0.15 ≈ cosine ≥ 0.85)
+    ):
+    """
+    Single-link deduplication.  Returns one representative per duplicate set,
+    chosen as the exact medoid of each connected component.
+    Sources for each representitive will be the union of the all sources in connected component
+    """
+    if len(valuesAndSources) == 0:
+        return []
+
+    # 1. Embed once, L2-normalise so cosine == dot product
+    valuesAsStr = [value for (value, sources) in valuesAndSources]
+    emb = preprocessing.normalize(embeddingModel.encode(valuesAsStr, show_progress_bar=False))
+
+    # 2. Dense distance matrix  (O(n²) memory!)
+    sim = cosine_similarity(emb)
+    dist = 1.0 - sim
+
+    # 3. Boolean adjacency under threshold (no self-loops)
+    mask = (dist <= tau) & ~np.eye(len(values), dtype=bool)
+
+    # 4. Connected components (single-link duplicate sets)
+    components = connectedComponentsFromMask(mask)
+
+    # 5. Medoid for every component
+    representatives = []
+    for comp in components:
+        if comp.size == 1:
+            representatives.append(values[comp[0]])
+        else:
+            # union all members of connected component
+            sourcesUnion = set()
+            for index in comp:
+                value, sources = valuesAndSources[index]
+                sourcesUnion |= set(sources)
+            # use medoid element as representative
+            medoid_idx = medoidFromEmbeddings(comp, emb)
+            representatives.append((values[medoid_idx], sorted(list(sourcesUnion))))
+
+    return representatives
 
 def deduplicateByEmbeddings(
         values: List[str],
