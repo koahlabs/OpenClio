@@ -792,8 +792,7 @@ def getFacetValues(
             facetValues=[
                 FacetValue(
                     facet=facet,
-                    value=cleanTrailingTagsInOutput(
-                        extractTagValue(value, "answer")[1])
+                    value=extractTagValue(value, "answer")[1].strip()
                 ) for (facet, value) in zip(facets, facetOutputs)]
         )
 
