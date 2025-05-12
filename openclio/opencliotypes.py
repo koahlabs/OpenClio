@@ -119,6 +119,7 @@ class OpenClioConfig:
     maxChildrenForRenaming: int = 10 #: Maximum number of children in category to display when deciding what to name it, more will make longer prompt but give more accurate classification
     nRenameSamples: int = 5 #: How many times to resample the new name and description that we sample, once the children are assigned to a cluster. More samples will take longer but help decrease noise from ordering of children
 
+    ### Extra Params
     tokenizerArgs: Dict[str, Any] = field(default_factory=lambda: {
         "enable_thinking": False # don't need thinking for the simple things we are doing, also without this we lose prompt prefix (I think?)
     }) #: Extra parameters to pass into our tokenizer when caling apply_chat_template

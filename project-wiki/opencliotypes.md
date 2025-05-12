@@ -138,6 +138,8 @@ If you are making your own facets or using genericSummaryFacets, you can just le
 
 And it'll pass the data to your facet's getFacetPrompt function (openclio.genericSummaryFacets just calls str(data))
 
+### General params
+
 <a id="opencliotypes.OpenClioConfig.seed"></a>
 
 #### seed
@@ -174,6 +176,8 @@ Whether to deduplicate the data. This is very important as non-deduped data can 
 
 The function to use for comparing if two pieces of data are equivalent. If None, will use prompts.conversationToString if it's a list, or just the value otherwise
 
+### Generate Base Clusters params
+
 <a id="opencliotypes.OpenClioConfig.getConversationFunc"></a>
 
 #### getConversationFunc
@@ -209,6 +213,8 @@ Number of points we sample outside the cluster (as examples of stuff closest to,
 #### nNameDescriptionSamplesPerCluster
 
 How many times to sample a cluster's name and description. We sample multiple times and take the most frequent answer, so higher values here help avoid any noise from data ordering (but takes longer)
+
+### Hierarchy params
 
 <a id="opencliotypes.OpenClioConfig.minTopLevelSize"></a>
 
@@ -254,6 +260,8 @@ How many times to resample the new name and description that we sample, once the
 
 <a id="opencliotypes.OpenClioConfig.tokenizerArgs"></a>
 
+### Extra Params
+
 #### tokenizerArgs
 
 Extra parameters to pass into our tokenizer when caling apply_chat_template
@@ -265,6 +273,8 @@ Extra parameters to pass into our tokenizer when caling apply_chat_template
 Extra parameters to pass into vllm.SamplingParams
 
 <a id="opencliotypes.OpenClioConfig.htmlMaxSizePerFile"></a>
+
+### Website Params
 
 #### htmlMaxSizePerFile
 
@@ -282,3 +292,8 @@ Optional function that takes two inputs (dataPoint: Any, dataPointFacetData: Con
 
 Optional function that takes a data point and returns a json of the corresponding conversation. It should look like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey :3"}, ...]. If you just want to dispaly the data as a string, just return a single entry like this: [{"role": "<whatever you want>", "content": "<your str content>"}]
 
+<a id="opencliotypes.OpenClioConfig.webuiPort"></a>
+
+#### webuiPort
+
+The port used when hosting webui

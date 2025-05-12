@@ -57,6 +57,7 @@ Keyword arguments:
 - data -- The conversations we are running clio on. These should be formatted like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hi :3"},...] (see OpenClioConfig in opencliotypes.py if your data isn't formatted like this)
 - outputDirectory -- The directory path where we store checkpoints/outputs
 - htmlRoot -- The path where the visuals will be stored on your website. For example, "/opencliooutputs"
+- hostWebui -- True if we want to host webui (otherwise website files are stored, but not hosted)
 - cfg -- Optional, an instance of openclio.OpenClioConfig, this lets you modify some of openclio's settings. Look at the comments for what individual fields mean.
 
 Any extra args you provide will be assigned to your OpenClioConfig
