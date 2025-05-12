@@ -25,6 +25,7 @@ embeddingModel = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 # Run clio, output to static website, and run webui
 outputDirectory = "output"
 outputWebsitePath = "/clioResults"
+# keep in mind VLLM doesn't like to be interrupted with ctrl-c and will hang, so you can just press c if you are in the console and it'll listen and break
 clio.runClio(facets=clio.mainFacets, llm=llm, embeddingModel=embeddingModel, data=data, outputDirectory=outputDirectory, htmlRoot=outputWebsitePath)
 ```
 
