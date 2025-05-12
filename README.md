@@ -1,7 +1,9 @@
 # OpenClio
 Open source version of [Anthropic's Clio: A system for privacy-preserving insights into real-world AI use](https://www.anthropic.com/research/clio)
 
-See an example run of this on ~400,000 conversations from Wildchat [here](https://www.phylliida.dev/modelwelfare/wildchat/).
+Designed to run using local LLMs via [VLLM](https://github.com/vllm-project/vllm).
+
+See an example run of this on ~400,000 english conversations from Wildchat [here](https://www.phylliida.dev/modelwelfare/wildchat/).
 
 ## How do I use?
 
