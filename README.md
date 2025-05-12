@@ -103,7 +103,7 @@ genericSummaryFacets = [
 
 Where `getSummarizeFacetPrompt` looks like this
 
-```
+```python
 from openclio import doCachedReplacements, Facet, OpenClioConfig
 from typing import Callable, Dict, Any
 def getSummarizeFacetPrompt(tokenizer, facet: Facet, data: Any, cfg: OpenClioConfig, dataToStr: Callable[[Any], str], tokenizerArgs: Dict[str, Any]) -> str:
