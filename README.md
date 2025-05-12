@@ -36,7 +36,7 @@ As you browse, the hash of the website will be modified. This lets you share spe
 
 You can also put the outputted files into your own website, it's just a single static html file that loads json files.
 
-The data is split up into many chunks (determined by [htmlMaxSizePerFile](/project-wiki/opencliotypes.md#opencliotypes.OpenClioConfig.htmlMaxSizePerFile)) and streamed as the user browses the tree.
+The data is split up into many compressed chunks (determined by [htmlMaxSizePerFile](/project-wiki/opencliotypes.md#opencliotypes.OpenClioConfig.htmlMaxSizePerFile), by default 10MB chunks) and streamed as the user browses the tree.
 
 To see what other parameters you can pass to [runClio](project-wiki/openclio.md#openclio.runClio), see the docs for [OpenClioConfig](project-wiki/opencliotypes.md#opencliotypes.OpenClioConfig). Any of these fields can be passed into runClio and they will be [used](openclio/openclio.py#L118).
 
