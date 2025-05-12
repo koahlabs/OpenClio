@@ -181,7 +181,6 @@ function buildLeaf(url,data){
 async function handleToggle(e){
   const det=e.currentTarget;
   const parentPath=join(det.__pathArr);
-  console.log("handling toggle " + parentPath);
   if(det.open){
     if(!det.__built && det.__childrenData){
       const childTotal=det.__childrenData.reduce((s,i)=>s+count(i),0);
@@ -280,9 +279,6 @@ var curHash = "";
 
 window.addEventListener("hashchange", function(event) {
   if (window.location.hash != curHash && modifyHashAllowed) {
-    console.log("Hash modified!");
-    console.log(curHash);
-    console.log(window.location.hash);
     restoreFromHash().then(() => {
         curHash = window.location.hash;
     });
@@ -298,8 +294,6 @@ function updateHash(){
   const compressedBase64 = LZUTF8.encodeBase64(LZUTF8.compress(hashStr));
   curHash = "#" + encodeURIComponent(compressedBase64);
   window.location.hash = curHash;
-  console.log("Updated hash to: " + curHash);
-  console.log(hashStr);
 }
 let modifyHashAllowed=true;
 
@@ -324,7 +318,6 @@ async function expandPath(pathStr){
 
 async function restoreFromHash(){
   modifyHashAllowed=false;
-  console.log("restoring from hash");
   hashStr = window.location.hash;
   if (hashStr.length > 0) {
     try {
@@ -339,10 +332,6 @@ async function restoreFromHash(){
 
   const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
   const convSeg=segs.find(s=>s.startsWith('c!'));
-  console.log("segs");
-  console.log(segs);
-  console.log("convSegs");
-  console.log(convSeg);
 
   const catSegs=[], convListSegs=[];
   segs.filter(s=>s && s!==convSeg).forEach(p=>{
