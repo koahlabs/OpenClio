@@ -1,5 +1,5 @@
 # OpenClio
-Open source version of Anthropic's Clio: A system for privacy-preserving insights into real-world AI use
+Open source version of [Anthropic's Clio: A system for privacy-preserving insights into real-world AI use](https://www.anthropic.com/research/clio)
 
 How do I use?
 
