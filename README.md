@@ -34,4 +34,4 @@ As you browse, the hash of the website will be modified. This lets you share spe
 
 You can also put the outputted files into your own website, it's just a single static html file that loads json files.
 
-To see what other parameters you can pass to runClio, see the docs for [https://github.com/Phylliida/OpenClio/blob/main/project-wiki/opencliotypes.md#opencliotypes.OpenClioConfig](OpenClioConfig). Any of these fields can be passed into runClio and they will be [https://github.com/Phylliida/OpenClio/blob/main/openclio/openclio.py#L118](used).
+To see what other parameters you can pass to runClio, see the docs for [OpenClioConfig](project-wiki/opencliotypes.md#opencliotypes.OpenClioConfig). Any of these fields can be passed into runClio and they will be [https://github.com/Phylliida/OpenClio/blob/main/openclio/openclio.py#L118](used).
