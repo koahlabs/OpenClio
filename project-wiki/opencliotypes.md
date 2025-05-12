@@ -124,11 +124,11 @@ If you want to modify stuff more, the first place to start is things that change
 
 If each data point doesn't look like a conversation ([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey :3"}, ...]), you can modify
 
-dedupKeyFunc = lambda dataPoint: <return some value here you can use as a key for deduplicating your data>
+dedupKeyFunc = lambda dataPoint: return some value here you can use as a key for deduplicating your data
 
 and
 
-getConversationFunc = lambda dataPoint: <return some value here that looks like a conversation>
+getConversationFunc = lambda dataPoint: return some value here that looks like a conversation
 
 If they don't look like a conversation at all, you can't use facets=openclio.mainFacets.
 
