@@ -24,7 +24,7 @@ outputWebsitePath = "/clioResults"
 clio.runClio(facets=clio.mainFacets, llm=llm, embeddingModel=embeddingModel, data=data, outputDirectory=outputDirectory, htmlRoot=outputWebsitePath)
 ```
 
-That'll provide a link for you, go there, and you should see your cleo outputs!
+That'll provide a link for you, go there, and you should see your clio outputs!
 
 ![Tree view](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/exampleHierarchy.png?raw=true)
 
