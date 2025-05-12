@@ -1,6 +1,8 @@
 # OpenClio
 Open source version of [Anthropic's Clio: A system for privacy-preserving insights into real-world AI use](https://www.anthropic.com/research/clio)
 
+See an example run of this on ~400,000 conversations from Wildchat [here](https://www.phylliida.dev/modelwelfare/wildchat/).
+
 ## How do I use?
 
 ```
@@ -148,6 +150,7 @@ In general, your function should just return the string that is then later passe
 
 Having a `summaryCritera` is important, otherwise clusters will not be generated.
 
-## Related Work
+## Related Work and Citations
 
 [Kura](https://github.com/ivanleomk/kura) is a seperate implementation of some parts of Clio.
+[Wildchat](https://wildchat.allen.ai/) is the data I used when testing/on that website.
