@@ -304,14 +304,11 @@ async function expandPath(pathStr){
     prefix.push(seg);
     const cur=join(prefix);
     let det=pathMap.get(cur);
-    if(!det){
-      const li=document.querySelector(`li[data-path="${CSS.escape(cur)}"]`);
-      if(li?.__load) await li.__load();
-      det=pathMap.get(cur);
-    }
     if(det && !det.open){
-      det.open=true;
-      await handleToggle({currentTarget:det});
+      det.removeEventListener('toggle', handleToggle);
+      det.open = true;
+      await handleToggle({ currentTarget: det }); // run it yourself
+      det.addEventListener('toggle', handleToggle);
     }
   }
 }

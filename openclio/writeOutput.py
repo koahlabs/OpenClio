@@ -5,6 +5,7 @@ from collections import defaultdict
 from pathlib import Path
 import gzip
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
+from .lzutf8 import compress
 
 # 0 is root/highest level
 def getAllClustersAtLevel(facetI: int, output: OpenClioResults, level: int):
@@ -219,3 +220,47 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
         templateText = templateF.read().replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
         with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:
             outputIndex.write(templateText)
+
+
+def getHashMapping(output: OpenClioResults, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, verbose=True) -> List[List[str]]:
+    # store these for data analysis uses
+    if conversationFilter is None:
+        conversationFilter = lambda conv, facetData: True
+    for facetI, facet in enumerate(output.facets):
+        if shouldMakeFacetClusters(facet):
+            numLevels = getNumLevels(output, facetI)
+            for conv in getAllClustersAtLevel(facetI, output=output, level=numLevels-1):
+                conv.filteredIndices = [convIndex for convIndex in conv.indices if conversationFilter(output.data[convIndex], output.facetValues[convIndex])]
+
+    storeConversationCounts(output)
+
+    allFacetMappings = []
+    for facetI, facet in enumerate(output.facets):
+        facetMappings = [None for _ in range(len(output.data))]
+        if shouldMakeFacetClusters(facet):
+            curPath = f'f{facetI}'
+            facetHash = curPath
+            if verbose: print(facet)
+            for rootClusterI, rootCluster in enumerate(sorted(output.rootClusters[facetI], key=lambda rootCluster: -rootCluster.numConversations)):
+                rootClusterPath = f"{curPath}.{rootClusterI}"
+                rootClusterHash = f"{facetHash},{rootClusterPath}"
+                def getClusterUrlMapping(cluster: ConversationCluster, curPath: str, curHash: str):
+                    # get url for this cluster
+                    if cluster.children is None:
+                        # $c to signal that we are displaying the list of conversations
+                        # The second bit tells us which conversation
+                        convHash = f"{curHash},{curPath}$c,c!{curPath}!"
+                        if cluster.filteredIndices is not None:
+                            for i, filteredI in enumerate(cluster.filteredIndices):
+                                s = f"{convHash}{i}"
+                                facetMappings[filteredI] = compress(s, "Base64")
+                    else:
+                        for childI, child in enumerate(sorted(cluster.children, key=lambda childKey: -childKey.numConversations)):
+                            childPath = f"{curPath}.{childI}"
+                            childHash = f"{curHash},{childPath}"
+                            getClusterUrlMapping(cluster=child, curPath=childPath, curHash=childHash)
+                getClusterUrlMapping(cluster=rootCluster, curPath=rootClusterPath, curHash=rootClusterHash)
+                if verbose: print(rootClusterI)
+        allFacetMappings.append(facetMappings)
+    return allFacetMappings
+

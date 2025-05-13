@@ -155,6 +155,10 @@ In general, your function should just return the string that is then later passe
 
 Having a `summaryCritera` is important, otherwise clusters will not be generated.
 
+## Todo
+
+Render Clickable 2D UMAP Plot of Embeddings
+
 ## Related Work and Citations
 
 - [Kura](https://github.com/ivanleomk/kura) is a seperate implementation of some parts of Clio.
