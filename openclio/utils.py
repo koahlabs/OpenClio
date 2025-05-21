@@ -105,16 +105,21 @@ def filterDataToEnglish(data : List[List[Dict[str,str]]]) -> List[List[Dict[str,
 def dedup(data: List[List[Dict[str, str]]],
         dedupKeyFunc: Callable[[Any], Any],
         batchSize: int,
-        verbose: bool):
+        verbose: bool,
+        returnMapping: bool=False):
     """Deduplicates the given data, using dedupKeyFunc as item keys, processing batchSize elements at a time"""
         
-    existingConvs = set()
+    existingConvs = {}
     dedupedConvs = []
+    mapping = {}
     def processOutputFunc(dataI, s, dataKey):
         if not dataKey in existingConvs:
+            existingConvs[dataKey] = len(dedupedConvs)
+            mapping[dataI] = len(dedupedConvs)
             dedupedConvs.append(data[dataI])
-            existingConvs.add(dataKey)
-    
+        else:
+            mapping[dataI] = existingConvs[dataKey]
+
     runBatched(list(range(len(data))),
         getInputs=lambda dataI: dedupKeyFunc(data[dataI]),
         processBatch=lambda dataKeys: dataKeys,
@@ -122,7 +127,10 @@ def dedup(data: List[List[Dict[str, str]]],
         batchSize=batchSize,
         verbose=verbose)
     
-    return dedupedConvs
+    if returnMapping:
+        return dedupedConvs, mapping
+    else:
+        return dedupedConvs
 
 def getExampleData():
     """Extracts some example data for parsing"""
