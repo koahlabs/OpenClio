@@ -15,6 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "tqdm",
     "dataclasses",
     "vllm",
     "pandas",
@@ -28,6 +29,8 @@ dependencies = [
     "pyarrow",
     "faiss-cpu",
     "cryptography",
+    "umap-learn[plot]",
+    "numba"
 ]
 dynamic = ["version"]
 

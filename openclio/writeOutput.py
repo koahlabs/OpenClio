@@ -250,8 +250,8 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
 
     pathContainingTemplate = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(pathContainingTemplate, "websiteTemplate.html"), "r") as templateF:
-        templateText = templateF.read()
-            .replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
+        templateText = templateF.read() \
+            .replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json")) \
             .replace("ISPASSWORDPROTECTED", "true" if password is not None else "false")
         with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:
             outputIndex.write(templateText)
