@@ -6,6 +6,14 @@ from pathlib import Path
 import gzip
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .lzutf8 import compress
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+import secrets
+import struct
+
+ITERATIONS = 800_000
+MAGIC = b"EJ01"          # 4-byte file signature
 
 # 0 is root/highest level
 def getAllClustersAtLevel(facetI: int, output: OpenClioResults, level: int):
@@ -31,7 +39,7 @@ def getNumLevels(output: OpenClioResults, facetI: int):
     return getDepthHelper(output.rootClusters[facetI][0])
 
 # we want to gather stuff together until we reach maxSize
-def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool):
+def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool, encryptKey: AESGCM = None, salt: bytes = None):
     fileMap = {}
 
     facet = output.facets[facetI]
@@ -117,11 +125,27 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
             outputPathForCluster = facetDir / f"data{curIndex}.json.gz"
             htmlPathForCluster = facetHtmlDir / f"data{curIndex}.json.gz"
             curIndex += 1
-            with gzip.open(outputPathForCluster, "wt", encoding="utf-8") as gz:
-                json.dump(jsonData, gz, separators=(",", ":"))
+            if encryptKey is None:
+                with gzip.open(outputPathForCluster, "wt", encoding="utf-8") as gz:
+                    json.dump(jsonData, gz, separators=(",", ":"))
+            else:
+                rawJson = json.dumps(jsonData, separators=(",", ":")).encode()
+                gzipped = gzip.compress(rawJson, compresslevel=9)
+                nonce  = secrets.token_bytes(12)
+                cipher = encryptKey.encrypt(nonce, gzipped, None)
+                header  = (
+                    MAGIC +
+                    struct.pack("<I", ITERATIONS) +  # little-endian uint32
+                    salt +
+                    nonce
+                )
+                with open(outputPathForCluster, "wb") as f:
+                    f.write(header)
+                    f.write(cipher)
+
             if verbose:
                 print(outputPathForCluster)
-            fileMap[cluster] = str(htmlPathForCluster)
+            fileMap[cluster] = htmlPathForCluster.as_posix() # this avoids windows adding backslashes
         # otherwise, continue to recurse until we can
         else:
             if not cluster.children is None:
@@ -180,7 +204,7 @@ def filterToEnglish(conversation, conversationFacetData):
 # aim for 10MB or smaller files, and filter to only english ones
 # clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)
 
-def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True):
+def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True, password: str=None):
     """
     Converts the given output to a static webpage and json files, dumped to targetDir
     It's split up into multiple json files, each of max size maxSizePerFile, and streamed as needed
@@ -206,18 +230,29 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
 
     storeConversationCounts(output)
 
+    if password is None:
+        encryptKey, salt = None, None
+    else:
+        salt       = secrets.token_bytes(16)
+        encryptKey = AESGCM(
+            PBKDF2HMAC(
+                hashes.SHA256(), 32, salt, ITERATIONS
+            ).derive(password.encode())
+        )
     rootJson = []
     for facetI, facet in enumerate(output.facets):
         if verbose: print(f"facet {facet.name}")
         if shouldMakeFacetClusters(facet):
-            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose)
+            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose, encryptKey=encryptKey, salt=salt)
             rootJson.append(facetJson)
     with open(os.path.join(targetDir, "rootObjects.json"), "w") as f:
         json.dump(rootJson, f)
 
     pathContainingTemplate = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(pathContainingTemplate, "websiteTemplate.html"), "r") as templateF:
-        templateText = templateF.read().replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
+        templateText = templateF.read()
+            .replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json"))
+            .replace("ISPASSWORDPROTECTED", "true" if password is not None else "false")
         with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:
             outputIndex.write(templateText)
 

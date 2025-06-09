@@ -252,7 +252,8 @@ def runClio(facets: List[Facet],
         maxSizePerFile=cfg.htmlMaxSizePerFile,
         conversationFilter=cfg.htmlConversationFilterFunc,
         dataToJson=cfg.htmlDataToJsonFunc,
-        verbose=cfg.verbose
+        verbose=cfg.verbose,
+        password=cfg.password
     )
 
     # write redirect page if we are nested, so the webui opens to it nicely

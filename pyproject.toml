@@ -27,6 +27,7 @@ dependencies = [
     "setuptools",
     "pyarrow",
     "faiss-cpu",
+    "cryptography",
 ]
 dynamic = ["version"]
 

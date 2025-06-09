@@ -139,9 +139,11 @@ class OpenClioConfig:
     })
 
     ### Website settings
+    password: Optional[str] = None #: Password protect webui files, if None they aren't protected
     htmlMaxSizePerFile: int = 10000000 #: Maximum size per json file: the data on the website is split up into chunks of this size or less and setup so you can stream the data as needed
     htmlConversationFilterFunc: Optional[Callable[[List[Dict[str, str]], ConversationFacetData], bool]] = None #: Optional function that takes two inputs (dataPoint: Any, dataPointFacetData: ConversationFacetData) and returns bool if we should include that data on the website.
     htmlDataToJsonFunc: Optional[Callable[[Any], Dict[str, Any]]] = None #: Optional function that takes a data point and returns a json of the corresponding conversation. It should look like [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hey :3"}, ...]. If you just want to dispaly the data as a string, just return a single entry like this: [{"role": "<whatever you want>", "content": "<your str content>"}]
+    
 
     ### Webui settings
     webuiPort: int = 8421

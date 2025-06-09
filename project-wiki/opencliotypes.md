@@ -276,6 +276,10 @@ Extra parameters to pass into vllm.SamplingParams
 
 ### Website Params
 
+#### password
+
+A string to use, to password protect your webui files. By default, password is None and they will be unprotected.
+
 #### htmlMaxSizePerFile
 
 Maximum size per json file: the data on the website is split up into chunks of this size or less and setup so you can stream the data as needed

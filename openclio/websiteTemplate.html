@@ -93,6 +93,55 @@ async function fetchJson(u) {
 function sleep(seconds) {
   return new Promise(resolve => setTimeout(resolve, seconds * 1000));
 }
+
+const MAGIC = new TextEncoder().encode("EJ01"); // 4-byte signature
+
+async function deriveKey(password, salt, iterations){
+  const keyMaterial = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+      {name:"PBKDF2",hash:"SHA-256",salt,iterations},
+      keyMaterial,{name:"AES-GCM",length:256},false,["decrypt"]);
+}
+
+var password = null;
+
+async function decryptPasswordProtectedFile(url){
+  var res;
+  var numRetries = 5;
+  for (var retryIter = 0; retryIter < numRetries; retryIter++) {
+    res = await fetch(url,{cache:'reload'});
+    if (res.ok) break;
+    if (retryIter == numRetries-1) {
+        throw new Error(res.status);
+    } else {
+        await sleep(1); // rate limit
+    }
+  }
+
+  const arrayBuf   = await res.arrayBuffer();     // wait here
+    if (!password) {
+        password  = prompt("Password?");
+    }
+  const u8  = new Uint8Array(arrayBuf);
+  const dv  = new DataView(arrayBuf);
+
+  /* 1 ─ validate header */
+  for(let i=0;i<4;i++) if(u8[i]!==MAGIC[i]) throw "Bad magic";
+  const iterations = dv.getUint32(4, true);
+  const salt  = u8.slice(8, 24);
+  const nonce = u8.slice(24, 36);
+  const data  = u8.slice(36);
+
+  /* 2 ─ PBKDF2 → AES-GCM */
+  const key   = await deriveKey(password, salt, iterations);
+
+  /* 3 ─ decrypt, gunzip, parse JSON */
+  const plain = new Uint8Array(
+      await crypto.subtle.decrypt({name:"AES-GCM",iv:nonce}, key, data));
+  const json  = JSON.parse(pako.ungzip(plain,{to:"string"}));
+  return json;
+}
     
 async function fetchJsonGz(url) {
   var res;
@@ -121,6 +170,7 @@ const count=getNum;
 const sortByCount=a=>[...a].sort((p,q)=>count(q)-count(p));
 const facetCount=f=>Array.isArray(f.hierarchy)?f.hierarchy.reduce((s,c)=>s+count(c),0):0;
 
+const PASSWORD_PROTECTED = ISPASSWORDPROTECTED;
 const ROOT="ROOTOBJECTSJSON";
 const pathMap=new Map();
 let openConvHash=null;
@@ -168,7 +218,13 @@ async function buildNode(item,pathArr,siblingTotal){
 }
 async function buildPlaceholder(ph,pathArr,siblingTotal){
   const url=ph.path, pathStr=join(pathArr);
-  const data=await fetchJsonGz(url);
+  var data;
+  if (PASSWORD_PROTECTED) {
+    data=await decryptPasswordProtectedFile(url);
+  }
+  else {
+    data=await fetchJsonGz(url);
+  }
   return (data.children||data.conversations) ?  await buildNode(data,pathArr,siblingTotal) : buildLeaf(url,data);
 }
 function buildLeaf(url,data){
