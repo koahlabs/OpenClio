@@ -106,6 +106,38 @@ async function deriveKey(password, salt, iterations){
 
 var password = null;
 
+function credAPIAvailable() {
+  return ('credentials' in navigator) && ('PasswordCredential' in window);
+}
+
+/* ---------- retrieve (auto-fill) ---------- */
+async function loadPwdViaCredAPI() {
+  if (!credAPIAvailable()) { 
+    return null;
+  }  
+    
+  try {
+    // unmediated:true  ⇒ silent auto-sign-in if the user allowed it
+    const cred = await navigator.credentials.get({password: true, unmediated: true});
+    console.log(cred);
+    return cred ? cred.password : null;
+  } catch { return null; }
+}
+
+/* ---------- store (after user enters pwd) ---------- */
+async function savePwdViaCredAPI(pwd) {
+
+  // We need to supply an “id” (username).  Use something stable:
+  const id = location.origin;
+
+  const cred = new PasswordCredential({ id, password: pwd });
+  try {
+  console.log("Stored password");
+    await navigator.credentials.store(cred);   // prompts the user
+    return true;
+  } catch { return false; }
+}
+
 async function decryptPasswordProtectedFile(url){
   var res;
   var numRetries = 5;
@@ -118,29 +150,50 @@ async function decryptPasswordProtectedFile(url){
         await sleep(1); // rate limit
     }
   }
-
+  var alreadyHasPassword = password !== null;
   const arrayBuf   = await res.arrayBuffer();     // wait here
-    if (!password) {
-        password  = prompt("Password?");
+  for (var attempts = 0; attempts < 10; attempts++) {
+      try {
+            if (!password) {
+                password = await loadPwdViaCredAPI();
+                if (!password) {
+                    var promptStr = attempts > 0 ? "Wrong Password. Password?" : "Password?";
+                    password  = prompt(promptStr);
+                }
+            }
+            console.log(password);
+          const u8  = new Uint8Array(arrayBuf);
+          const dv  = new DataView(arrayBuf);
+
+          /* 1 ─ validate header */
+          for(let i=0;i<4;i++) if(u8[i]!==MAGIC[i]) throw "Bad magic";
+          const iterations = dv.getUint32(4, true);
+          const salt  = u8.slice(8, 24);
+          const nonce = u8.slice(24, 36);
+          const data  = u8.slice(36);
+
+          /* 2 ─ PBKDF2 → AES-GCM */
+          const key   = await deriveKey(password, salt, iterations);
+
+          /* 3 ─ decrypt, gunzip, parse JSON */
+          const plain = new Uint8Array(
+              await crypto.subtle.decrypt({name:"AES-GCM",iv:nonce}, key, data));
+          const json  = JSON.parse(pako.ungzip(plain,{to:"string"}));
+          if (!alreadyHasPassword) {
+            savePwdViaCredAPI(password);
+          }
+          return json;
+    } catch (err) {
+        console.log(err);
+        if (err instanceof DOMException && err.name === "OperationError")
+        {
+          password = null;
+        }
+        else
+          throw err;                        // other I/O / JSON errors bubble up
     }
-  const u8  = new Uint8Array(arrayBuf);
-  const dv  = new DataView(arrayBuf);
-
-  /* 1 ─ validate header */
-  for(let i=0;i<4;i++) if(u8[i]!==MAGIC[i]) throw "Bad magic";
-  const iterations = dv.getUint32(4, true);
-  const salt  = u8.slice(8, 24);
-  const nonce = u8.slice(24, 36);
-  const data  = u8.slice(36);
-
-  /* 2 ─ PBKDF2 → AES-GCM */
-  const key   = await deriveKey(password, salt, iterations);
-
-  /* 3 ─ decrypt, gunzip, parse JSON */
-  const plain = new Uint8Array(
-      await crypto.subtle.decrypt({name:"AES-GCM",iv:nonce}, key, data));
-  const json  = JSON.parse(pako.ungzip(plain,{to:"string"}));
-  return json;
+      
+  }
 }
     
 async function fetchJsonGz(url) {
