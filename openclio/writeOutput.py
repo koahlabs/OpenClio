@@ -9,8 +9,11 @@ from .lzutf8 import compress
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+import umap
 import secrets
+import numpy as np
 import struct
+import concave_hull
 
 ITERATIONS = 800_000
 MAGIC = b"EJ01"          # 4-byte file signature
@@ -39,7 +42,7 @@ def getNumLevels(output: OpenClioResults, facetI: int):
     return getDepthHelper(output.rootClusters[facetI][0])
 
 # we want to gather stuff together until we reach maxSize
-def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool, encryptKey: AESGCM = None, salt: bytes = None):
+def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, umapResults: List[Any], hashMapping: List[Any], maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool, encryptKey: AESGCM = None, salt: bytes = None):
     fileMap = {}
 
     facet = output.facets[facetI]
@@ -55,16 +58,24 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
     facetDir.mkdir(parents=True, exist_ok=True)
     facetHtmlDir = Path(rootHtmlPath) / facet.name
 
-    def encodeConversations(filteredIndices):
+    mappingFromConvIToFiles = np.zeros([len(output.data),2], np.int32)
+
+    def encodeConversations(filteredIndices, conversationsArray: List[Any], curFileIndex: int = -1):
         conversations = []
         for conversationI in filteredIndices:
+            indexInConversationsArray = len(conversationsArray)
+            if curFileIndex != -1: # -1 means just probing, not writing
+                # write a tuple, which file, and location in file
+                mappingFromConvIToFiles[conversationI,0] = curFileIndex
+                mappingFromConvIToFiles[conversationI,1] = indexInConversationsArray
             data = output.facetValues[conversationI]
             facetValue = data.facetValues[facetI]
             conversation = data.conversation
+            conversationsArray.append({"conversation": dataToJson(output.data[conversationI]), "hash": hashMapping[facetI][conversationI]})
             conversations.append({
                 "facetValue": facetValue.value,
                 "allFacetValues": [{"facet": value.facet.name, "value": value.value} for value in data.facetValues],
-                "conversation": dataToJson(output.data[conversationI])
+                "conversation": indexInConversationsArray,
             })
         return conversations
     
@@ -77,7 +88,14 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
         del cluster.totalSize
         [removeStoredFlagsAndSizes(child) for child in cluster.children] if cluster.children is not None else None
         
-    
+    def storeConcaveHulls(cluster: ConversationCluster):
+        cluster.concaveHullIndices = getClusterConcaveHullIndices(cluster)
+        [storeConcaveHulls(child) for child in cluster.children] if cluster.children is not None else None
+
+    def removeConcaveHulls(cluster: ConversationCluster):
+        del cluster.concaveHullIndices
+        [removeConcaveHulls(child) for child in cluster.children] if cluster.children is not None else None
+
     # first pass, store all sizes recursively
     def storeSizes(cluster: ConversationCluster):
         if cluster.stored:
@@ -86,7 +104,9 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
         if cluster.children is None:
             # todo: add facet values
             if cluster.filteredIndices is not None:
-                totalSize += len(json.dumps(encodeConversations(cluster.filteredIndices)))
+                conversationsArray = []
+                jsonValues = encodeConversations(cluster.filteredIndices, conversationsArray=conversationsArray)
+                totalSize += len(json.dumps([jsonValues, conversationsArray]))
         else:
             totalSize += sum([storeSizes(x) for x in cluster.children]) if cluster.children is not None else 0
         
@@ -94,24 +114,51 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
             "summary": cluster.summary,
             "name": cluster.name,
             "numConvs": cluster.numConversations,
+            "concaveHull": cluster.concaveHullIndices, # todo: store this as byte array for more concise
         }))
         cluster.totalSize = totalSize
         return totalSize
     
-    def getClusterJson(cluster: ConversationCluster):
+    def getClusterJson(cluster: ConversationCluster, conversationsArray: List[Any], curFileIndex: int = -1):
         if cluster.stored:
             return {"numConvs": cluster.numConversations, "path": fileMap[cluster]}
         resJson = {
             "summary": cluster.summary,
             "name": cluster.name,
             "numConvs": cluster.numConversations,
+            "concaveHull": cluster.concaveHullIndices,
         }
         if cluster.children is None and cluster.filteredIndices is not None:
-            resJson["conversations"] = encodeConversations(cluster.filteredIndices)
+            resJson["conversations"] = encodeConversations(cluster.filteredIndices, conversationsArray=conversationsArray, curFileIndex=curFileIndex)
         elif cluster.children is not None:
-            resJson["children"] = [getClusterJson(child) for child in cluster.children]
+            resJson["children"] = [getClusterJson(child, conversationsArray=conversationsArray, curFileIndex=curFileIndex) for child in cluster.children]
         return resJson
-            
+    
+    def getAllClusterChildren(cluster: ConversationCluster, clusterIndices: List[int]):
+        if cluster.children is None:
+            clusterIndices.extend(cluster.filteredIndices)
+        else:
+            for child in cluster.children:
+                getAllClusterChildren(child, clusterIndices)
+
+    def getClusterConcaveHullIndices(cluster: ConversationCluster):
+        clusterIndices = []
+        getAllClusterChildren(cluster, clusterIndices)
+        clusterIndices = np.array(clusterIndices)
+        if len(clusterIndices) == 0:
+            return []
+        childrenPoints = umapResults[facetI][clusterIndices]
+        convexHullIndices = concave_hull.convex_hull_indexes(childrenPoints)
+        # size one or zero gives segfault
+        if len(convexHullIndices) == 0:
+            # convex hull failed, just do all the points
+            concaveHullIndices = np.arange(childrenPoints.shape[0])
+        else:
+            concaveHullIndices = concave_hull.concave_hull_indexes(childrenPoints, convex_hull_indexes=convexHullIndices)
+        # lookup indices in larger set
+        return clusterIndices[concaveHullIndices].tolist()
+
+
     curIndex = 0
     def storeIfNotTooLarge(cluster: ConversationCluster):
         if cluster.stored: raise ValueError("We already stored this cluster")
@@ -120,10 +167,14 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
         # or if size including children is less than maxSize
         if cluster.totalSize < maxSizePerFile or allChildrenStored:
             nonlocal curIndex
-            jsonData = getClusterJson(cluster)
+            conversationsArray = []
+            jsonData = getClusterJson(cluster, conversationsArray=conversationsArray, curFileIndex=curIndex)
+            # add the actual conversation data separately (inside they just have references, this makes it easy to lookup single conversation from a file)
+            jsonData['conversationsData'] = conversationsArray
             cluster.stored = True
             outputPathForCluster = facetDir / f"data{curIndex}.json.gz"
             htmlPathForCluster = facetHtmlDir / f"data{curIndex}.json.gz"
+
             curIndex += 1
             if encryptKey is None:
                 with gzip.open(outputPathForCluster, "wt", encoding="utf-8") as gz:
@@ -155,17 +206,33 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, maxSizePerFile
     rootClusterHtmlPaths = []
     for clusterI, rootCluster in enumerate(output.rootClusters[facetI]):
         resetStoredFlags(rootCluster)
+        storeConcaveHulls(rootCluster)
         # repeat reductions until we finally store root level
         while not rootCluster.stored:
             storeSizes(rootCluster)
             storeIfNotTooLarge(rootCluster)
         # remove the flags so they don't stick around and waste memory
         removeStoredFlagsAndSizes(rootCluster)
+        removeConcaveHulls(rootCluster)
 
         rootClusterHtmlPaths.append({"numConvs": rootCluster.numConversations, "path": fileMap[rootCluster]})
 
         print(f"Finished cluster {clusterI+1}/{len(output.rootClusters[facetI])}")
-    return {"facet": facetJson, "hierarchy": rootClusterHtmlPaths}
+
+    # for the actual points, store them in a minimal byte array    
+    pointsData = umapResults[facetI].astype("<f4").tobytes()
+    outputPointsPath = facetDir / f"points.bin"
+    htmlPointsPath = facetHtmlDir / f"points.bin"
+    with open(outputPointsPath, "wb") as f:
+        f.write(pointsData)
+
+    conversationsMappingData = mappingFromConvIToFiles.astype("<i4").tobytes()
+    outputConversationsMappingPath = facetDir / f"conversationsMapping.bin"
+    htmlConversationsMappingPath = facetHtmlDir / f"conversationsMapping.bin"
+    with open(outputConversationsMappingPath, "wb") as f:
+        f.write(pointsData)
+
+    return {"facet": facetJson, "hierarchy": rootClusterHtmlPaths, "points": htmlPointsPath.as_posix()}
 
 def storeConversationCounts(output: OpenClioResults):
     for rootClusters in output.rootClusters:
@@ -201,10 +268,18 @@ def filterToEnglish(conversation, conversationFacetData):
                 return True
     return False
 
+
+def computeUmap(embeddingArr: EmbeddingArray, verbose: bool = False):
+    # unique=True is very important otherwise it gets stuck
+    umapModel = umap.UMAP(n_components=2, unique=True, verbose=verbose)
+    return umapModel.fit_transform(embeddingArr)
+
+def computeOutputUmap(output: OpenClioResults, verbose: bool = False):
+    return [(computeUmap(embeddingArr, verbose=verbose) if embeddingArr is not None else None) for embeddingArr in output.facetValuesEmbeddings]
+
 # aim for 10MB or smaller files, and filter to only english ones
 # clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)
-
-def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True, password: str=None):
+def convertOutputToWebpage(output: OpenClioResults, umapResults: List[Any], rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True, password: str=None):
     """
     Converts the given output to a static webpage and json files, dumped to targetDir
     It's split up into multiple json files, each of max size maxSizePerFile, and streamed as needed
@@ -218,6 +293,8 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
     """
     if dataToJson is None:
         dataToJson = lambda conversation: [{'role': turn['role'], "content": turn['content']} for turn in conversation]
+
+    hashMapping = getHashMapping(output=output, conversationFilter=conversationFilter, verbose=verbose)
 
     # store these for data analysis uses
     if conversationFilter is None:
@@ -243,7 +320,8 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
     for facetI, facet in enumerate(output.facets):
         if verbose: print(f"facet {facet.name}")
         if shouldMakeFacetClusters(facet):
-            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose, encryptKey=encryptKey, salt=salt)
+            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, umapResults=umapResults, hashMapping=hashMapping, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose, encryptKey=encryptKey, salt=salt)
+
             rootJson.append(facetJson)
     with open(os.path.join(targetDir, "rootObjects.json"), "w") as f:
         json.dump(rootJson, f)
@@ -255,6 +333,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
             .replace("ISPASSWORDPROTECTED", "true" if password is not None else "false")
         with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:
             outputIndex.write(templateText)
+    
 
 
 def getHashMapping(output: OpenClioResults, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, verbose=True) -> List[List[str]]:

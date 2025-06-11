@@ -51,6 +51,89 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
 ::-webkit-scrollbar{width:.5rem}
 ::-webkit-scrollbar-thumb{border-radius:1rem;background:#555}
 ::-webkit-scrollbar-track{background:#222}
+
+
+.plotBtns{
+  display:flex;
+  justify-content:flex-end;   /* right-align inside the panel */
+  gap:.35rem;
+}
+
+
+.plotDock{
+  position:fixed;top:.75rem;right:.75rem;z-index:50;
+  width:260px;height:260px;padding:.35rem;background:var(--bg-1);
+  border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow);transition:all var(--trans);
+}
+.plotDock.smol{
+  display:flex;flex-direction:column;gap:.35rem
+}
+.plotDock.max{
+  top: 1.25rem;               /* same as your body padding   */
+  right: 1.25rem;
+  bottom: 1.25rem;
+  left: 1.25rem;
+  width: auto; height: auto;  /* let flexbox stretch */
+  border-radius: var(--radius);
+}
+.plotDock.max #plotCanvas{
+  display:block;      /* makes margin auto work */
+  margin:0 auto;      /* left & right auto  ⇒  horizontal centre */
+}
+.plotDock.hide{transform:translateX(110%);pointer-events:none;opacity:0}
+#plotToggle,#plotMax{
+  align-self:flex-end;background:none;border:none;color:var(--txt-1);
+  font-size:1.25rem;cursor:pointer;padding:.1rem .4rem;line-height:1
+}
+#plotToggle:hover,#plotMax:hover{color:var(--accent-hi)}
+#plotSelect{
+  width:100%;background:var(--bg-2);color:var(--txt-0);
+  border:1px solid var(--border);border-radius:var(--radius);
+  padding:.2rem .4rem;font-size:.8rem
+}
+#plotCanvas{flex:1;background:#000;border-radius:var(--radius)}
+#plotToggle,#plotMax{
+  align-self:auto;            /* override earlier “flex-end” */
+}
+
+#plotHideAll{background:none;border:none;color:var(--txt-1);
+            font-size:1.25rem;cursor:pointer;padding:.1rem .4rem;line-height:1}
+#plotHideAll:hover{color:var(--accent-hi)}
+
+
+/* ───── eye toggle ───── */
+.eyeToggle{
+  font-size:1rem;
+  cursor:pointer;
+  margin-right:.35rem;   /* ← change */
+  margin-left:0;         /* ← change */
+  opacity:.55;
+  transition:opacity var(--trans);
+  user-select:none;
+}
+.eyeToggle.on{opacity:1}       /* highlighted when hull is shown  */
+.eyeToggle:hover{opacity:.9}
+
+
+#plotLeaf{
+  position:fixed;
+  top:1.25rem;      /* align with body padding */
+  right:0;          /* attach to right edge   */
+  transform:none;
+  background:var(--bg-1);
+  border:1px solid var(--border);
+  border-radius:.5rem 0 0 .5rem;   /* rounded on the left side */
+  padding:.35rem .55rem;
+  font-size:1.25rem;
+  color:var(--txt-1);
+  cursor:pointer;
+  opacity:.65;
+  transition:opacity var(--trans);
+  z-index:51;
+}
+#plotLeaf:hover{opacity:1}
+.hidden{display:none}       /* already exists – reused here */
 </style>
 </head>
 
@@ -65,8 +148,53 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
     <div id="convContent"></div>
   </div>
 </div>
+<!-- ───── scatter-plot overlay ───── -->
+<div id="plotWrap"  class="plotDock smol">
+     <div class="plotBtns">
+     <select id="plotSelect" title="Choose facet"></select>
+     <button id="plotHideAll" title="Hide all clusters (x)">👁</button>
+      <button id="plotMax"    title="Maximise (m)">⥤</button>
+      <button id="plotToggle" title="Hide (h)">⤫</button>
+    </div>
+  <canvas id="plotCanvas"></canvas>
+</div>
+<div id="plotLeaf" class="hidden" title="Show plot (h)">◀</div>
 
 <script>
+
+/* ───────── mini-map globals ───────── */
+const plotCanvas  = document.getElementById('plotCanvas');
+const plotCtx     = plotCanvas.getContext('2d');
+const plotWrap    = document.getElementById('plotWrap');
+const plotToggle  = document.getElementById('plotToggle');
+const plotMaxBtn  = document.getElementById('plotMax');
+const plotSelect  = document.getElementById('plotSelect');
+
+const plotLeaf = document.getElementById('plotLeaf');
+const plotHideAll = document.getElementById('plotHideAll');
+
+function hideAllHulls(){
+  /* 1 – clear the map & repaint */
+  hullVisible.clear();
+  drawPoints();
+
+  /* 2 – dim every eye icon that was on */
+  document.querySelectorAll('.eyeToggle.on')
+          .forEach(el => el.classList.remove('on'));
+}
+
+plotHideAll.onclick = hideAllHulls;
+
+/* optional keyboard shortcut */
+document.addEventListener('keydown', e=>{
+  if (e.key==='x') hideAllHulls();
+});
+
+var facetOptions = new Map();   // label → url
+let   curPoints   = [];           // active array  [[x,y],…]
+let   xyMinMax    = null;         // {xmin,xmax,ymin,ymax}
+
+
 const $=(t,a={},...k)=>{
   const e=document.createElement(t);
   for(const [key,val] of Object.entries(a)){
@@ -93,6 +221,274 @@ async function fetchJson(u) {
 function sleep(seconds) {
   return new Promise(resolve => setTimeout(resolve, seconds * 1000));
 }
+
+
+/* ---------- facet-points helpers ---------- */
+
+
+async function toggleHullForNode(node){
+  const p = join(node.__pathArr);
+  const facetName = facetIToStr[node.__faceti];
+  if (plotSelect.value !== facetName){                 // not already selected
+    plotSelect.value = facetName;                      // move the <select>
+    await loadDraw(facetOptions.get(facetName));       // load (if needed)
+  }
+  const eye = node.__eye;
+  if (hullVisible.has(p)){          // currently on → turn off
+    hullVisible.delete(p);
+    eye.classList.remove('on');
+  }else{                            // off → turn on
+    addHull(node);
+    eye.classList.add('on');
+  }
+  drawPoints();
+}
+
+var pointsCache = new Map();             // url → Promise
+
+async function getPoints(url){
+  if(!pointsCache.has(url))
+    pointsCache.set(url, await loadPointsLE(url));
+  return pointsCache.get(url);
+}
+
+function calcMinMax(arr){
+  let xmin=+Infinity,xmax=-Infinity,ymin=+Infinity,ymax=-Infinity;
+  for(const [x,y] of arr){
+    if(x<xmin) xmin=x; if(x>xmax) xmax=x;
+    if(y<ymin) ymin=y; if(y>ymax) ymax=y;
+  }
+  return {xmin,xmax,ymin,ymax};
+}
+
+/* ---------- hull helpers ---------- */
+var hullVisible   = new Map();          // path → {idx,color}
+const hullColors = [
+  '#ff767580',   /* red            */
+  '#e1705580',   /* orange-brown   */
+  '#55efc480',   /* green          */
+  '#fdcb6e80',   /* yellow         */
+  '#ffeaa780',   /* pale-yellow    */
+  '#d980fa80',   /* violet         */
+  '#fab1a080',   /* salmon         */
+  '#6c5ce780'    /* indigo         */
+];
+
+function addHull(node){
+  if (!node.__concaveHull || !curPoints.length) return;
+  console.log("Adding hull with " + node.__concaveHull.length + " points");
+  const p = join(node.__pathArr);
+  if (hullVisible.has(p)) return;
+  hullVisible.set(p,{idx:node.__concaveHull,
+                     color:hullColors[hullVisible.size%hullColors.length],
+                     facetI:node.__faceti});
+  drawPoints();             // redraw incl. new hull
+}
+function removeHull(node){
+  hullVisible.delete(join(node.__pathArr));
+  if (node.__eye) node.__eye.classList.remove('on');   // <─ new
+  drawPoints();
+}
+function pointInPoly(poly, x, y){
+  let c = false;
+  for (let i=0,j=poly.length-1;i<poly.length;j=i++)
+    ((poly[i][1]>y)!=(poly[j][1]>y)) &&
+    (x < (poly[j][0]-poly[i][0])*(y-poly[i][1])/(poly[j][1]-poly[i][1])+poly[i][0]) &&
+    (c=!c);
+  return c;
+}
+
+// ────────────────────────────────────────────────────────────────
+//  Replaces the previous drawPoints()
+//  – draws all points bright
+//  – dims everything with a translucent veil
+//  – punches transparent holes in that veil for every
+//    currently-visible hull belonging to the selected facet
+//  – finally fills the hull polygons themselves (as before)
+// ────────────────────────────────────────────────────────────────
+function drawPoints() {
+  if (!curPoints.length) return;
+
+  /* ---------- sizing & scaling ---------- */
+  const cssW = screen.availWidth * 0.9;
+  const cssH = screen.availHeight * 0.8;
+  const dpr  = 1;                       // use window.devicePixelRatio if desired
+
+  plotCanvas.width  = cssW * dpr;
+  plotCanvas.height = cssH * dpr;
+
+  const { width: w, height: h } = plotCanvas;
+  plotCtx.clearRect(0, 0, w, h);
+
+  const { xmin, xmax, ymin, ymax } = xyMinMax;
+  const sx = xmax === xmin ? 1 : w / (xmax - xmin);
+  const sy = ymax === ymin ? 1 : h / (ymax - ymin);
+
+
+  /* ---------- step 1: draw all points, but dimmer ---------- */
+    plotCtx.fillStyle = '#6ec1ff22';
+  for (const [x, y] of curPoints) {
+    const px = (x - xmin) * sx;
+    const py = (y - ymin) * sy;
+    plotCtx.fillRect(px - 1, py - 1, 2, 2);
+  }
+  
+  /* ---------- step 3: draw coloured hull polygons themselves ---------- */
+// how many CSS pixels you want the shape to grow OUTWARD
+const PUFF = 6;                 // try 4-10 and tweak to taste
+
+for (const [path, { idx, facetI, color }] of hullVisible) {
+
+  if (facetIToStr[facetI] !== plotSelect.value) continue; // only active facet
+
+  /* -------------------------------------------------------
+     BUILD THE PATH (unchanged)
+  ------------------------------------------------------- */
+  plotCtx.beginPath();
+  idx.forEach((i, j) => {
+    const [x, y] = curPoints[i];
+    const px = (x - xmin) * sx;
+    const py = (y - ymin) * sy;
+    j ? plotCtx.lineTo(px, py) : plotCtx.moveTo(px, py);
+  });
+  plotCtx.closePath();
+
+  /* -------------------------------------------------------
+     1) FAT STROKE IN FILL COLOUR  → gives the “puff”
+  ------------------------------------------------------- */
+  plotCtx.save();                   // isolate our tweaks
+  plotCtx.strokeStyle = color;      // same colour as fill
+  plotCtx.lineJoin    = "round";    // softer corners
+  plotCtx.lineWidth   = PUFF * 2;   // outward growth = PUFF
+  plotCtx.stroke();
+
+  /* -------------------------------------------------------
+     2) NORMAL FILL  (hides the inner half of the fat stroke)
+  ------------------------------------------------------- */
+  plotCtx.fillStyle = color;
+  plotCtx.fill();
+
+  /* -------------------------------------------------------
+     3) OPTIONAL CRISP OUTLINE
+        comment-out if you don’t want an edge
+  ------------------------------------------------------- */
+  plotCtx.lineWidth   = 1.5;
+  plotCtx.strokeStyle = "#00000088"; // translucent black
+  plotCtx.stroke();
+
+  plotCtx.restore();                // restore previous state
+}
+}
+
+function resizeCanvas() {
+
+  drawPoints();   // repaint with the new scale
+}
+
+plotCanvas.addEventListener('click',ev=>{
+  const rect = plotCanvas.getBoundingClientRect(),
+        dpr  = 1,
+        cx   = (ev.clientX-rect.left)*dpr,
+        cy   = (ev.clientY-rect.top )*dpr;
+  const {xmin,xmax,ymin,ymax}=xyMinMax,
+        sx = xmax===xmin?1:plotCanvas.width /(xmax-xmin),
+        sy = ymax===ymin?1:plotCanvas.height/(ymax-ymin),
+        dx = x=>xmin+x/sx,
+        dy = y=>ymax-(y/sy);
+  for (const [path,{idx,facetURL}] of hullVisible){
+    if (facetURL!==plotSelect.value) continue;
+    const poly = idx.map(i=>curPoints[i]);
+    if (pointInPoly(poly,dx(cx),dy(cy))){
+       const det = pathMap.get(path);
+       if(det && !det.open){
+         det.open = true;       // triggers toggle & redraw
+       }
+       break;
+    }
+  }
+});
+
+window.addEventListener('resize', resizeCanvas);
+
+async function loadPointsLE(url) {
+  // 1. fetch the raw bytes
+  const res    = await fetch(url);
+  const buffer = await res.arrayBuffer();
+
+  // 2. wrap in a DataView (gives per-read endian control)
+  const view   = new DataView(buffer);
+
+  // 3. walk through the bytes, 8-byte stride (4 for x, 4 for y)
+  const pts = [];
+  for (let off = 0; off < view.byteLength; off += 8) {
+    const x = view.getFloat32(off,     /*littleEndian=*/ true);
+    const y = view.getFloat32(off + 4, /*littleEndian=*/ true);
+    pts.push([x, y]);
+  }
+  return pts;
+}
+
+async function addFacetOption(label, url){
+  if (facetOptions.has(label)) return;
+  console.log("Add facet option " + label + " " + url);
+  facetOptions.set(label, url);
+  console.log(facetOptions);
+  plotSelect.appendChild($('option', { value:label }, label));
+  //if (plotSelect.selectedIndex === -1){      // first entry
+  await loadDraw(url);
+  plotSelect.value = label;
+  //}
+}
+
+plotSelect.onchange = async () => await loadDraw(facetOptions.get(plotSelect.value));
+
+var ptsLookup = new Map();
+
+async function loadDraw(url){
+  var pts;
+  if (ptsLookup.has(url)) {
+    pts = ptsLookup.get(url);
+  }
+  else {
+    pts = await getPoints(url);
+    ptsLookup[url] = pts;
+  }
+  curPoints = pts;
+  xyMinMax  = calcMinMax(pts);
+  resizeCanvas();
+}
+
+function hidePlot(){
+  plotWrap.classList.add('hide');
+  plotLeaf.classList.remove('hidden');
+}
+function showPlot(){
+  plotWrap.classList.remove('hide');
+  plotLeaf.classList.add('hidden');
+}
+
+plotToggle.onclick = hidePlot;
+plotLeaf.onclick    = showPlot;
+
+
+plotMaxBtn.onclick = () => {
+  plotWrap.classList.toggle('max');
+  plotWrap.classList.toggle('smol');
+  setTimeout(() => {
+    //resizeCanvas();
+    //drawPoints();
+  }, 260);   // wait for transition, then fit
+};
+
+
+document.addEventListener('keydown',e=>{
+  if (e.key==='h'){
+    if (plotWrap.classList.contains('hide')) showPlot();
+    else hidePlot();
+  }
+  if (e.key==='m') plotMaxBtn.onclick();
+  if (e.key==='x') hideAllHulls();
+});
 
 const MAGIC = new TextEncoder().encode("EJ01"); // 4-byte signature
 
@@ -216,7 +612,12 @@ async function fetchJsonGz(url) {
 
   return JSON.parse(text);
 }
-const join=p=>p.join('.'), split=s=>s.split('.');
+function join(p) {
+    return p.join(".");
+}
+function split(s) {
+    return s.split(".");
+}
 const getNum=i=>i?.numConversations??i?.numConvs??0;
 const isPlaceholder=i=>typeof i==='object'&&i!==null&&'path'in i&&!('children'in i);
 const count=getNum;
@@ -228,12 +629,15 @@ const ROOT="ROOTOBJECTSJSON";
 const pathMap=new Map();
 let openConvHash=null;
 
+var facetIToStr = {};
+
 /* ───────── root build ───────── */
 window.onload=()=>fetchJson(ROOT).then(buildFacets);
-function buildFacets(raw){
+async function buildFacets(raw){
   const facets=[...raw].sort((a,b)=>facetCount(b)-facetCount(a));
   const root=document.getElementById('treeRoot'); root.innerHTML='';
-  facets.forEach((f,fi)=>{
+  for (var fi = 0; fi < facets.length; fi++) {
+    var f = facets[fi];
     const own=facetCount(f);
     const li=$('li',{},
       $('details',{},
@@ -243,18 +647,27 @@ function buildFacets(raw){
           f.facet?.question?$('span',{class:'summary'},f.facet.question):null)));
     const details=li.firstChild;
     details.__childrenData=sortByCount(f.hierarchy);
+    details.__faceti = fi;
+    facetIToStr[fi] = f.facet?.name;
+    
+    if(f.points){
+      details.__pointsURL = f.points;
+      await addFacetOption(f.facet?.name, f.points);
+      details.__pointsLoaded = true;
+    }
     details.__pathArr=[`f${fi}`];
     details.addEventListener('toggle',handleToggle);
     pathMap.set('f'+fi,details);
     root.appendChild(li);
-  });
+  }
   restoreFromHash();
+  resizeCanvas();
 }
 
 
 /* ───────── builders ───────── */
-async function buildNode(item,pathArr,siblingTotal){
-  if(isPlaceholder(item)) return await buildPlaceholder(item,pathArr,siblingTotal);
+async function buildNode(faceti,item,pathArr,siblingTotal){
+  if(isPlaceholder(item)) return await buildPlaceholder(faceti,item,pathArr,siblingTotal);
   const p=join(pathArr);
   const details=$('details',{}); pathMap.set(p,details);
   const own=count(item), pct=siblingTotal?Math.round(own*100/siblingTotal):100;
@@ -266,10 +679,27 @@ async function buildNode(item,pathArr,siblingTotal){
   details.__childrenData=sortByCount(item.children||[]);
   details.__convs=item.conversations||null;
   details.__pathArr=pathArr;
+  details.__concaveHull=item.concaveHull;
+  details.__faceti = faceti;
+  if (details.__concaveHull){
+      // ① eye in the <summary>
+      const eye = $('span',
+          {class:'eyeToggle', title:'Toggle cluster'}, '👁');
+      eye.onclick = async ev => {            // stop the <details> toggle
+        ev.stopPropagation();
+       ev.preventDefault();    // cancel the <details> auto-toggle
+        await toggleHullForNode(details);
+      };
+      // insert at the start
+      details.firstChild.insertBefore(eye,  details.firstChild.firstChild);
+
+      // store a back-reference for later
+      details.__eye = eye;
+    }
   details.addEventListener('toggle',handleToggle);
   return $('li',{},details);
 }
-async function buildPlaceholder(ph,pathArr,siblingTotal){
+async function buildPlaceholder(faceti,ph,pathArr,siblingTotal){
   const url=ph.path, pathStr=join(pathArr);
   var data;
   if (PASSWORD_PROTECTED) {
@@ -278,7 +708,7 @@ async function buildPlaceholder(ph,pathArr,siblingTotal){
   else {
     data=await fetchJsonGz(url);
   }
-  return (data.children||data.conversations) ?  await buildNode(data,pathArr,siblingTotal) : buildLeaf(url,data);
+  return (data.children||data.conversations) ?  await buildNode(faceti,data,pathArr,siblingTotal) : buildLeaf(url,data);
 }
 function buildLeaf(url,data){
   const d=$('details',{},$('summary',{},url.split('/').pop()));
@@ -290,7 +720,14 @@ function buildLeaf(url,data){
 async function handleToggle(e){
   const det=e.currentTarget;
   const parentPath=join(det.__pathArr);
+  /* ─ eye visibility ─ */
+  if (det.__eye){
+    //det.__eye.style.display = det.open ? 'none' : '';
+  }
+  
   if(det.open){
+  
+      
     if(!det.__built && det.__childrenData){
       const childTotal=det.__childrenData.reduce((s,i)=>s+count(i),0);
       const ul=$('ul',{class:'tree'});
@@ -302,7 +739,7 @@ async function handleToggle(e){
             spinnerChild = $('li',{},spinner());
             ul.appendChild(spinnerChild);
         }
-        var childNode = await buildNode(ch,[...det.__pathArr,i],childTotal);
+        var childNode = await buildNode(det.__faceti, ch,[...det.__pathArr,i],childTotal);
         if (isPlaceholder(ch)) {
             spinnerChild.replaceWith(childNode);
         }
@@ -333,7 +770,19 @@ async function handleToggle(e){
     det.querySelectorAll(':scope > ul.tree, :scope > details').forEach(n=>n.remove());
     det.__built=false;det.__convsBuilt=false;
     for(const key of [...pathMap.keys()]){
-      if(key.startsWith(parentPath+'.')||key===parentPath+'$c') pathMap.delete(key);
+      if(key.startsWith(parentPath+'.')||key===parentPath+'$c') {
+         pathMap.delete(key);
+      }
+    }
+    var removedAny = false;
+    for (const [path,{idx,facetI,color}] of [...hullVisible]){
+      if(path.startsWith(parentPath+'.')) {
+         hullVisible.delete(path);
+         removedAny = true;
+      }
+    }
+    if (removedAny) {
+        drawPoints();
     }
     if(openConvHash && openConvHash.startsWith(`c!${parentPath}.`)) closeConversation();
   }
@@ -374,6 +823,7 @@ function closeConversation(){
   setTimeout(()=>modalWrap.classList.add('hidden'),250);
   openConvHash=null;updateHash();
 }
+
 function mdToHtml(t=''){
   let h=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   h=h.replace(/```([\s\S]*?)```/g,(m,c)=>`<pre><code>${c}</code></pre>`);
@@ -416,6 +866,7 @@ async function expandPath(pathStr){
     if(det && !det.open){
       det.removeEventListener('toggle', handleToggle);
       det.open = true;
+      removeHull(det);
       await handleToggle({ currentTarget: det }); // run it yourself
       det.addEventListener('toggle', handleToggle);
     }
