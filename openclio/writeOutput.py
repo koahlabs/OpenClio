@@ -1,19 +1,23 @@
-from typing import List, Dict, Tuple, Callable, Any
+from typing import List, Dict, Tuple, Callable, Any, Optional
 import os
 import json
 from collections import defaultdict
 from pathlib import Path
 import gzip
+from sentence_transformers import SentenceTransformer
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .lzutf8 import compress
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+from .utils import runBatched
+from numpy import typing as npt
 import umap
 import secrets
 import numpy as np
 import struct
 import concave_hull
+from .prompts import conversationToString
 
 ITERATIONS = 800_000
 MAGIC = b"EJ01"          # 4-byte file signature
@@ -269,13 +273,34 @@ def filterToEnglish(conversation, conversationFacetData):
     return False
 
 
-def computeUmap(embeddingArr: EmbeddingArray, verbose: bool = False):
+def computeUmapHelper(embeddingArr: EmbeddingArray, verbose: bool = False):
     # unique=True is very important otherwise it gets stuck
     umapModel = umap.UMAP(n_components=2, unique=True, verbose=verbose)
     return umapModel.fit_transform(embeddingArr)
 
-def computeOutputUmap(output: OpenClioResults, verbose: bool = False):
-    return [(computeUmap(embeddingArr, verbose=verbose) if embeddingArr is not None else None) for embeddingArr in output.facetValuesEmbeddings]
+def computeUmap(data: List[Any], facetValuesEmbeddings: List[Optional[EmbeddingArray]], embeddingModel: SentenceTransformer, tokenizer, cfg: OpenClioConfig):
+    cfg.print("Running umap on facet values")
+    resUmaps = [(computeUmapHelper(embeddingArr, verbose=cfg.verbose) if embeddingArr is not None else None) for embeddingArr in facetValuesEmbeddings]
+    cfg.print("Embedding conversations for umap")
+    # fallback to default conversation to string
+    conversationToStringFunc = cfg.conversationToStrFunc if cfg.conversationToStrFunc is not None else lambda conv: conversationToString(conv, tokenizer=tokenizer, maxTokens=-1)
+
+    def processBatchFunc(batchOfTextInputs: List[str]) -> List[npt.NDArray[np.float32]]:
+        embedded = embeddingModel.encode(batchOfTextInputs, show_progress_bar=False)
+        return [embedded[i] for i in range(len(batchOfTextInputs))]
+    
+    embeddedConversations = runBatched(data,
+                    getInputs=lambda conv: conversationToStringFunc(conv),
+                    processBatch=processBatchFunc,
+                    processOutput=lambda conv, inputs, emb: emb,
+                    batchSize=cfg.embedBatchSize,
+                    verbose=cfg.verbose)
+    
+    cfg.print("Running umap on embedded conversations")
+    conversationsUmap = computeUmapHelper(embeddingArr=embeddedConversations, verbose=cfg.verbose)
+    # last index is the umap over embeddings of conversations (instead of facet values)
+    resUmaps.append(conversationsUmap)
+    return resUmaps
 
 # aim for 10MB or smaller files, and filter to only english ones
 # clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)

@@ -59,7 +59,7 @@ Put your answer in this format:
     )
 
 
-def conversationToString(conversation: List[Dict[str, str]], tokenizer, maxTokens: int) -> str:
+def conversationToString(conversation: List[Dict[str, str]], tokenizer, maxTokens: int=-1) -> str:
     """
     Converts a conversation like
     [
@@ -88,7 +88,7 @@ def conversationToString(conversation: List[Dict[str, str]], tokenizer, maxToken
             conversationSoFarStr = "\n".join(conversationSoFar)
             conversationSoFarTokens = tokenizer.encode(conversationSoFarStr)
             # if adding this (user, assistant) turn puts us over the limit:
-            if len(conversationSoFarTokens) > maxTokens:
+            if len(conversationSoFarTokens) > maxTokens and maxTokens > 0: # -1 means ignore
                 if len(conversationPieces) == 0: # if this is the first two turns, truncate
                     return tokenizer.decode(conversationSoFarTokens[:maxTokens])
                 else: # otherwise, just return turns before this

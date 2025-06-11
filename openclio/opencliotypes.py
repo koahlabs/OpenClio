@@ -138,6 +138,9 @@ class OpenClioConfig:
         "verbose": True,
     })
 
+    ### Umap settings
+    conversationToStrFunc: Optional[Callable[[List[Dict[str, str]]], str]] = None #: Function to convert data points into strings to be embedded, when generating the 2D umap plot
+
     ### Website settings
     password: Optional[str] = None #: Password protect webui files, if None they aren't protected
     htmlMaxSizePerFile: int = 10000000 #: Maximum size per json file: the data on the website is split up into chunks of this size or less and setup so you can stream the data as needed
@@ -156,4 +159,5 @@ class OpenClioResults:
     baseClusters: List[Optional[List[ConversationCluster]]]
     rootClusters: List[Optional[List[ConversationCluster]]]
     data: List[List[Dict[str, str]]]
+    umap: List[Optional[npt.NDArray[np.float32]]]
     cfg: OpenClioConfig

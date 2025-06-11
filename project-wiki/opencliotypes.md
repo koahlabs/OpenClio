@@ -272,13 +272,25 @@ Extra parameters to pass into our tokenizer when caling apply_chat_template
 
 Extra parameters to pass into vllm.SamplingParams
 
-<a id="opencliotypes.OpenClioConfig.htmlMaxSizePerFile"></a>
+### UMAP Params
+
+<a id="opencliotypes.OpenClioConfig.conversationToStrFunc"></a>
+
+#### conversationToStrFunc
+
+Function to convert data points into strings to be embedded, when generating the 2D umap plot of the data.
+
+By default, will use `lambda conv: prompts.conversationToString(conv, tokenizer=tokenizer, maxTokens=-1)`
 
 ### Website Params
+
+<a id="opencliotypes.OpenClioConfig.password"></a>
 
 #### password
 
 A string to use, to password protect your webui files. By default, password is None and they will be unprotected.
+
+<a id="opencliotypes.OpenClioConfig.htmlMaxSizePerFile"></a>
 
 #### htmlMaxSizePerFile
 

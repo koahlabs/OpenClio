@@ -27,7 +27,7 @@ from .prompts import getFacetPrompt, getFacetClusterNamePrompt, getNeighborhoodC
 from .utils import flatten, unflatten, runBatched, dedup, runWebui
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .faissKMeans import FaissKMeans
-from .writeOutput import convertOutputToWebpage
+from .writeOutput import convertOutputToWebpage, computeUmap
 
 # these are facets from the paper
 mainFacets = [
@@ -148,6 +148,7 @@ def runClio(facets: List[Facet],
     def getResults():
         nonlocal data
         nonlocal dependencyModified
+        cfg.print("Deduping data")
         if cfg.dedupData:
             dedupKeyFunc = cfg.dedupKeyFunc
             if dedupKeyFunc is None:
@@ -160,7 +161,6 @@ def runClio(facets: List[Facet],
                     # identity key func
                     cfg.print("Using identity key func")
                     dedupKeyFunc = lambda x: x
-            cfg.print("Deduping data")
             data, dependencyModified = runIfNotExist("dedupedData.pkl", lambda:
                 dedup(data, dedupKeyFunc=dedupKeyFunc, batchSize=cfg.llmBatchSize, verbose=cfg.verbose),
                 dependencyModified=dependencyModified
@@ -223,6 +223,20 @@ def runClio(facets: List[Facet],
                 ),
                 dependencyModified=dependencyModified
             )
+
+        cfg.print("Running umap on data")
+        setSeed(cfg.seed)
+        umap = \
+            runIfNotExist("umapResults.pkl", lambda:
+                computeUmap(
+                    data=data,
+                    facetValuesEmbeddings=facetValuesEmbeddings,
+                    embeddingModel=embeddingModel,
+                    tokenizer=llm.get_tokenizer(),
+                    cfg=cfg
+                ),
+                dependencyModified=dependencyModified
+            )
         
         cfg.print("Saving results")
         return OpenClioResults(
@@ -232,6 +246,7 @@ def runClio(facets: List[Facet],
             baseClusters=baseClusters,
             rootClusters=rootClusters,
             data=data,
+            umap=umap,
             cfg=cfg
         )
 
