@@ -46,7 +46,7 @@ def getNumLevels(output: OpenClioResults, facetI: int):
     return getDepthHelper(output.rootClusters[facetI][0])
 
 # we want to gather stuff together until we reach maxSize
-def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, umapResults: List[Any], hashMapping: List[Any], maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool, encryptKey: AESGCM = None, salt: bytes = None):
+def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, hashMapping: List[Any], maxSizePerFile: int, dataToJson: Callable[[Any], Dict[str, Any]], targetDir: str, rootHtmlPath: str, verbose: bool, encryptKey: AESGCM = None, salt: bytes = None):
     fileMap = {}
 
     facet = output.facets[facetI]
@@ -151,7 +151,7 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, umapResults: L
         clusterIndices = np.array(clusterIndices)
         if len(clusterIndices) == 0:
             return []
-        childrenPoints = umapResults[facetI][clusterIndices]
+        childrenPoints = output.umap[facetI][clusterIndices]
         convexHullIndices = concave_hull.convex_hull_indexes(childrenPoints)
         # size one or zero gives segfault
         if len(convexHullIndices) == 0:
@@ -224,7 +224,7 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, umapResults: L
         print(f"Finished cluster {clusterI+1}/{len(output.rootClusters[facetI])}")
 
     # for the actual points, store them in a minimal byte array    
-    pointsData = umapResults[facetI].astype("<f4").tobytes()
+    pointsData = output.umap[facetI].astype("<f4").tobytes()
     outputPointsPath = facetDir / f"points.bin"
     htmlPointsPath = facetHtmlDir / f"points.bin"
     with open(outputPointsPath, "wb") as f:
@@ -289,12 +289,12 @@ def computeUmap(data: List[Any], facetValuesEmbeddings: List[Optional[EmbeddingA
         embedded = embeddingModel.encode(batchOfTextInputs, show_progress_bar=False)
         return [embedded[i] for i in range(len(batchOfTextInputs))]
     
-    embeddedConversations = runBatched(data,
+    embeddedConversations = np.stack(runBatched(data,
                     getInputs=lambda conv: conversationToStringFunc(conv),
                     processBatch=processBatchFunc,
                     processOutput=lambda conv, inputs, emb: emb,
                     batchSize=cfg.embedBatchSize,
-                    verbose=cfg.verbose)
+                    verbose=cfg.verbose))
     
     cfg.print("Running umap on embedded conversations")
     conversationsUmap = computeUmapHelper(embeddingArr=embeddedConversations, verbose=cfg.verbose)
@@ -304,7 +304,7 @@ def computeUmap(data: List[Any], facetValuesEmbeddings: List[Optional[EmbeddingA
 
 # aim for 10MB or smaller files, and filter to only english ones
 # clio.convertOutputToJsonChunks(cats, targetDir="chonkers/cliowildchat1", rootHtmlPath="/modelwelfare", maxSizePerFile=10000000, conversationFilter=clio.filterToEnglish)
-def convertOutputToWebpage(output: OpenClioResults, umapResults: List[Any], rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True, password: str=None):
+def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir: str, maxSizePerFile: int, conversationFilter: Callable[[List[Dict[str, str]], ConversationFacetData], bool]=None, dataToJson: Callable[[Any], Dict[str, Any]] = None, verbose=True, password: str=None):
     """
     Converts the given output to a static webpage and json files, dumped to targetDir
     It's split up into multiple json files, each of max size maxSizePerFile, and streamed as needed
@@ -341,19 +341,29 @@ def convertOutputToWebpage(output: OpenClioResults, umapResults: List[Any], root
                 hashes.SHA256(), 32, salt, ITERATIONS
             ).derive(password.encode())
         )
+    
+    # make rootObjects.json that holds references to all the files
     rootJson = []
     for facetI, facet in enumerate(output.facets):
         if verbose: print(f"facet {facet.name}")
         if shouldMakeFacetClusters(facet):
-            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, umapResults=umapResults, hashMapping=hashMapping, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose, encryptKey=encryptKey, salt=salt)
+            facetJson = encodeFacetDataInChunks(facetI=facetI, output=output, hashMapping=hashMapping, maxSizePerFile=maxSizePerFile, dataToJson=dataToJson, targetDir=targetDir, rootHtmlPath=rootHtmlPath, verbose=verbose, encryptKey=encryptKey, salt=salt)
 
             rootJson.append(facetJson)
     with open(os.path.join(targetDir, "rootObjects.json"), "w") as f:
         json.dump(rootJson, f)
 
+    # write umap points (the last entry in output.umap is for umap of conversation embeddings overall, instead of umap of embeddings of individual facet values)
+    pointsData = output.umap[-1].astype("<f4").tobytes()
+    outputPointsPath = rootHtmlPath / f"points.bin"
+    with open(outputPointsPath, "wb") as f:
+        f.write(pointsData)
+
+    # write webpage
     pathContainingTemplate = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(pathContainingTemplate, "websiteTemplate.html"), "r") as templateF:
         templateText = templateF.read() \
+            .replace("ROOTPOINTS", os.path.join(rootHtmlPath, "points.bin")) \
             .replace("ROOTOBJECTSJSON", os.path.join(rootHtmlPath, "rootObjects.json")) \
             .replace("ISPASSWORDPROTECTED", "true" if password is not None else "false")
         with open(os.path.join(targetDir, "index.html"), "w") as outputIndex:

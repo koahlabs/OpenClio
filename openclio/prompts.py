@@ -74,6 +74,8 @@ def conversationToString(conversation: List[Dict[str, str]], tokenizer, maxToken
     And truncates (rounding down to conversation boundaries) to maxTokens
     """
     fullConversation = "\n".join([f"{turn['role']}:\n{turn['content']}" for turn in conversation])
+    if maxTokens < 0:
+        return fullConversation
     if len(fullConversation) < maxTokens * 1.5: # lower bound estimate to avoid cost of running tokenizer
         return fullConversation 
     if len(tokenizer.encode(fullConversation)) < maxTokens:
