@@ -75,12 +75,13 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, hashMapping: L
             data = output.facetValues[conversationI]
             facetValue = data.facetValues[facetI]
             conversation = data.conversation
-            conversationsArray.append({"conversation": dataToJson(output.data[conversationI]), "hash": hashMapping[facetI][conversationI]})
-            conversations.append({
-                "facetValue": facetValue.value,
+            conversationsArray.append({
+                "conversation": dataToJson(output.data[conversationI]),
+                "hash": hashMapping[facetI][conversationI],
                 "allFacetValues": [{"facet": value.facet.name, "value": value.value} for value in data.facetValues],
-                "conversation": indexInConversationsArray,
+                "facetValue": facetValue.value,
             })
+            conversations.append(indexInConversationsArray)
         return conversations
     
     def resetStoredFlags(cluster: ConversationCluster):
@@ -148,7 +149,7 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, hashMapping: L
     def getClusterConcaveHullIndices(cluster: ConversationCluster):
         clusterIndices = []
         getAllClusterChildren(cluster, clusterIndices)
-        clusterIndices = np.array(clusterIndices)
+        clusterIndices = np.array(clusterIndices, dtype=np.int32)
         if len(clusterIndices) == 0:
             return []
         childrenPoints = output.umap[facetI][clusterIndices]
@@ -234,9 +235,9 @@ def encodeFacetDataInChunks(facetI: int, output: OpenClioResults, hashMapping: L
     outputConversationsMappingPath = facetDir / f"conversationsMapping.bin"
     htmlConversationsMappingPath = facetHtmlDir / f"conversationsMapping.bin"
     with open(outputConversationsMappingPath, "wb") as f:
-        f.write(pointsData)
+        f.write(conversationsMappingData)
 
-    return {"facet": facetJson, "hierarchy": rootClusterHtmlPaths, "points": htmlPointsPath.as_posix()}
+    return {"facet": facetJson, "hierarchy": rootClusterHtmlPaths, "points": htmlPointsPath.as_posix(), "conversationsMapping": htmlConversationsMappingPath.as_posix()}
 
 def storeConversationCounts(output: OpenClioResults):
     for rootClusters in output.rootClusters:
@@ -355,7 +356,7 @@ def convertOutputToWebpage(output: OpenClioResults, rootHtmlPath: str, targetDir
 
     # write umap points (the last entry in output.umap is for umap of conversation embeddings overall, instead of umap of embeddings of individual facet values)
     pointsData = output.umap[-1].astype("<f4").tobytes()
-    outputPointsPath = rootHtmlPath / f"points.bin"
+    outputPointsPath = os.path.join(targetDir, f"points.bin")
     with open(outputPointsPath, "wb") as f:
         f.write(pointsData)
 

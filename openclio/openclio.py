@@ -209,7 +209,8 @@ def runClio(facets: List[Facet],
                 ),
                 dependencyModified=dependencyModified
             )
-
+        
+        #dependencyModified = True
         cfg.print("Getting higher level clusters")
         setSeed(cfg.seed)
         rootClusters, dependencyModified = \
@@ -223,10 +224,10 @@ def runClio(facets: List[Facet],
                 ),
                 dependencyModified=dependencyModified
             )
-
+        #dependencyModified = False
         cfg.print("Running umap on data")
         setSeed(cfg.seed)
-        umap = \
+        umap, dependencyModified = \
             runIfNotExist("umapResults.pkl", lambda:
                 computeUmap(
                     data=data,
