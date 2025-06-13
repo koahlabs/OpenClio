@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Chat-data browser</title>
 <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/wordcloud2.js/1.0.2/wordcloud2.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
@@ -134,19 +135,100 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
 }
 #plotLeaf:hover{opacity:1}
 .hidden{display:none}       /* already exists – reused here */
+#treePane.hide { display:none; }
+
+#loading{
+  position:fixed; inset:0; display:flex;
+  align-items:center; justify-content:center;
+  background:rgba(0,0,0,.45);       /* dim page */
+  z-index:998;                      /* just under the modal */
+}
+#loading.hidden { display:none; }
+
+/* frequency chips under the “Selected conversations” panel */
+#freqBox{
+  margin-top:.7rem;
+  display:flex;
+  flex-wrap:wrap;
+  gap:.35rem;
+}
+.freqChip{
+  background:var(--bg-2);
+  padding:.25rem .55rem;
+  border-radius:var(--radius);
+  font-size:.75rem;
+  white-space:nowrap;
+}
+
+#loadMsg{
+  margin-bottom:.6rem;
+  font-size:.9rem;
+}
+
+#plotCanvas{touch-action:none;}   /* allow custom dragging */
 </style>
 </head>
 
 <body>
 <h1 style="margin-bottom:.8rem;font-size:1.7rem">Chat-data hierarchy browser</h1>
 
+<button id="treeToggle" class="hidden">Show tree</button>
+<span id="loadAllBtnSpace" class="hidden">
+<br /><br />
+<button id="loadAllBtn">load all</button> 
+</span>
 <div id="treePane"><ul id="treeRoot" class="tree"></ul></div>
 
 <div id="modalWrap" class="hidden">
   <div class="modal">
+  
+    <div id="selNav" style="margin:.6rem 0;display:flex;gap:.35rem">
+      <button id="navPrev">◀</button>
+      <button id="navNext">▶</button>
+      <span style="flex:1"></span>
+    </div>
     <button class="closeBtn" title="Esc">✕</button>
     <div id="convContent"></div>
   </div>
+</div>
+<br />
+<br />
+<br />
+<br />
+<br />
+<br />
+<br />
+<!-- ───── selected-conversations panel ───── -->
+  
+<div id="selPane" class="hidden">
+<div id="pager" class="hidden" style="margin-top:.6rem;display:flex;gap:.4rem">
+    <button id="prevPage">◀ prev</button>
+    <span id="pageInfo" style="flex:1;text-align:center"></span>
+    <button id="nextPage">next ▶</button>
+  </div>
+  <h2 style="margin:.3rem 0 .6rem">Selected conversations</h2>
+  <div id="selList"></div>
+  
+<div id="pager2" class="hidden" style="margin-top:.6rem;display:flex;gap:.4rem">
+    <button id="prevPage2">◀ prev</button>
+    <span id="pageInfo2" style="flex:1;text-align:center"></span>
+    <button id="nextPage2">next ▶</button>
+  </div>
+<details id="wcWrap" style="margin-top:.9rem">
+  <summary style="cursor:pointer;font-weight:600">
+    <span id="wordCloudTitle">Word-cloud</span> <span style="font-size:.8rem;color:var(--txt-1)">▼ click</span>
+  </summary>
+  <canvas id="wcCanvas" width="600" height="400"
+          style="display:block;margin-top:.6rem;max-width:100%;"></canvas>
+</details>
+
+<details id="wcWrap" style="margin-top:.9rem">
+  <summary style="cursor:pointer;font-weight:600">
+    Frequencies <span style="font-size:.8rem;color:var(--txt-1)">▼ click</span>
+  </summary>
+  <div id="freqBox"></div>
+</details>
+  <!-- NEW: slot for the frequency chips -->
 </div>
 <!-- ───── scatter-plot overlay ───── -->
 <div id="plotWrap"  class="plotDock smol">
@@ -159,9 +241,20 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
   <canvas id="plotCanvas"></canvas>
 </div>
 <div id="plotLeaf" class="hidden" title="Show plot (h)">◀</div>
-
+<div id="loading" class="hidden">
+<span id="loadMsg">Loading…</span> 
+  <span class="spinner"></span>
+</div>
 <script>
 
+const loadAllBtn = document.getElementById('loadAllBtn');
+const loadAllBtnSpace = document.getElementById('loadAllBtnSpace');
+var selConvFile = -1, selConvItem = -1;
+const loading = document.getElementById('loading');
+var treeNavArr  = null;   // array with the conversations of that node
+var treeNavInd = -1;   // its path in the hierarchy
+var treeRootConvs = null;
+var treeNavPath = null;
 /* ───────── mini-map globals ───────── */
 const plotCanvas  = document.getElementById('plotCanvas');
 const plotCtx     = plotCanvas.getContext('2d');
@@ -172,6 +265,192 @@ const plotSelect  = document.getElementById('plotSelect');
 
 const plotLeaf = document.getElementById('plotLeaf');
 const plotHideAll = document.getElementById('plotHideAll');
+
+const selPane   = document.getElementById('selPane');
+const selList   = document.getElementById('selList');
+const pager     = document.getElementById('pager');
+const prevPage  = document.getElementById('prevPage');
+const nextPage  = document.getElementById('nextPage');
+const pageInfo  = document.getElementById('pageInfo');
+const pager2     = document.getElementById('pager2');
+const prevPage2  = document.getElementById('prevPage2');
+const nextPage2  = document.getElementById('nextPage2');
+const pageInfo2  = document.getElementById('pageInfo2');
+
+const treePane   = document.getElementById('treePane');
+const navPrevBtn = document.getElementById('navPrev');
+const navNextBtn = document.getElementById('navNext');
+const treeTglBtn = document.getElementById('treeToggle');
+
+let selRect = null;   // {minX,maxX,minY,maxY} in canvas pixels
+const loadMsg = document.getElementById('loadMsg');
+function setLoad(txt){ loadMsg.textContent = txt; }
+
+const wordCloudTitle = document.getElementById("wordCloudTitle");
+
+function closeEntireTree(){
+    
+}
+
+function showTreeToggle(yes){
+    loadAllBtnSpace.classList.toggle("hidden", !yes);
+  treeTglBtn.classList.toggle('hidden', !yes);
+}
+function clearSelection(){
+  selResults = [];
+  selRect    = null;
+  selPane.classList.add('hidden');
+  drawPoints();
+  showTreeToggle(false);
+  showTree(true);
+  updateHash();
+}
+
+function showTree(yes){
+  if (yes) {
+    treePane.classList.remove('hide');
+  }
+  else {
+    treePane.classList.add('hide');
+  }
+  treeTglBtn.textContent = yes ? 'hide tree' : '📂 tree';
+}
+treeTglBtn.onclick = clearSelection;
+document.addEventListener('keydown', e=>{
+  if (e.key==='t' && !treeTglBtn.classList.contains('hidden')) clearSelection();
+});
+document.addEventListener('keydown', e=>{ if(e.key==='t') treeTglBtn.onclick(); });
+
+
+function updateModalNav(idxTotal, idxNow){
+  navPrevBtn.disabled = idxNow === 0;
+  navNextBtn.disabled = idxNow === idxTotal-1;
+}
+
+navPrevBtn.onclick = ()=> jumpRel(-1);
+navNextBtn.onclick = ()=> jumpRel(+1);
+
+function jumpRel(delta) {
+
+  /* 1 – if modal came from a box selection */
+  if (selResults.length) {
+    const pos  = selResults.findIndex(({fileI, itemI}) =>
+                  fileI === curFile && itemI === curItem);
+    if (pos < 0) return;
+    const next = selResults[pos + delta];
+    if (next) loadAndShowConversation(next.fileI, next.itemI);
+    return;
+  }
+
+  /* 2 – if modal came from the tree view */
+  if (treeNavArr) {
+    const nextIdx = parseInt(curItem) + delta;
+    if (nextIdx >= 0 && nextIdx < treeNavArr.length) {
+        curItem = nextIdx;
+        openConversation(treeNavArr[nextIdx], treeNavPath, nextIdx, treeRootConvs);
+    }
+  }
+}
+
+let curFile = -1, curItem = -1;   // remember what the modal shows
+
+const PAGE_SIZE = 50;
+let   selResults = [];   // [{fileI, itemI}, …]
+let   curPage    = 0;
+
+async function renderSelPage(alreadyLoading) {
+  const total = selResults.length;
+  const pages = Math.ceil(total / PAGE_SIZE) || 1;
+
+  // clamp page index
+  curPage = Math.min(Math.max(curPage, 0), pages - 1);
+
+  // slice rows for this page
+  const start = curPage * PAGE_SIZE;
+  const rows  = selResults.slice(start, start + PAGE_SIZE);
+
+  selList.innerHTML = '';
+  rows.forEach(({fileI, itemI}, i) => {
+    const btn = document.createElement('button');
+    btn.dataset.f = fileI;          // ← NEW
+    btn.dataset.i = itemI;          // ← NEW
+    btn.textContent = `conv ${start + i + 1}`;
+    btn.onclick = () => loadAndShowConversation(fileI, itemI);
+    selList.appendChild(btn);
+    selList.appendChild(document.createElement("br"));
+  });
+
+  // pager
+  pageInfo.textContent = `${curPage + 1} / ${pages}`;
+  pageInfo2.textContent = `${curPage + 1} / ${pages}`;
+  pager.classList.toggle('hidden', pages === 1);
+  pager2.classList.toggle('hidden', pages === 1);
+  prevPage.disabled = curPage === 0;
+  prevPage2.disabled = curPage === 0;
+  nextPage.disabled = curPage === pages - 1;
+  nextPage2.disabled = curPage === pages - 1;
+  
+  updateSelLabels();                               // then fix labels
+  await preloadCurrentPage(alreadyLoading);     // ensure data + update labels
+}
+prevPage.onclick = async () => { curPage--; await renderSelPage(false); };
+nextPage.onclick = async () => { curPage++; await renderSelPage(false); };
+prevPage2.onclick = async () => { curPage--; await renderSelPage(false); };
+nextPage2.onclick = async () => { curPage++; await renderSelPage(false); };
+
+async function loadAndShowConversation(fileI, itemI) {
+  curFile = fileI;  curItem = itemI;
+
+  loading.classList.remove('hidden');        // ① show spinner
+
+  try {
+    const mapping = conversationsMappings.get(plotSelect.value);
+    const baseURL = mapping.baseUrl;
+    const fileURL = `${baseURL}data${fileI}.json.gz`;
+
+    if (!loadAndShowConversation.cache) loadAndShowConversation.cache = new Map();
+    let convArr = loadAndShowConversation.cache.get(fileURL);
+    if (!convArr) {
+      convArr = PASSWORD_PROTECTED
+        ? (await decryptPasswordProtectedFile(fileURL)).conversationsData
+        : (await fetchJsonGz(fileURL)).conversationsData;
+      loadAndShowConversation.cache.set(fileURL, convArr);
+    }
+
+    openConversationSimple(convArr[itemI]);
+  } finally {
+    loading.classList.add('hidden');         // ② hide spinner
+  }
+}
+function openConversationSimple(conversation){
+  //openConvHash=`c!${join(pathArr)}!${idx}`;
+  convContent.innerHTML='';
+  if(conversation.allFacetValues?.length){
+    const colors=['#ff7675','#74b9ff','#55efc4','#fdcb6e','#ffeaa7','#a29bfe','#fab1a0','#81ecec'];
+    const box=$('div',{class:'facets'});
+    conversation.allFacetValues.forEach((fv,i)=>{
+      box.appendChild($('div',{class:'facetBubble',style:`background:${colors[i%colors.length]}`},
+        `${fv.facet}: ${fv.value}`));
+    });
+    convContent.appendChild(box);
+  }
+  conversation['conversation'].forEach(m=>{
+    const d=$('div',{class:`msg ${m.role}`},
+      $('span',{class:'role'},m.role+': '));
+    const span=$('span',{});span.innerHTML=mdToHtml(m.content);
+    d.appendChild(span);convContent.appendChild(d);
+  });
+  modalWrap.classList.add('show');modalWrap.classList.remove('hidden');
+  
+  if (selResults.length) {
+    updateModalNav(selResults.length, selResults.findIndex(r=>r.fileI===curFile && r.itemI===curItem));
+    selConvFile = curFile;
+    selConvItem = curItem;
+  }
+  
+  updateHash();
+}
+
 
 function hideAllHulls(){
   /* 1 – clear the map & repaint */
@@ -188,6 +467,8 @@ plotHideAll.onclick = hideAllHulls;
 /* optional keyboard shortcut */
 document.addEventListener('keydown', e=>{
   if (e.key==='x') hideAllHulls();
+  if (e.key == "ArrowRight") jumpRel(1);
+  if (e.key == "ArrowLeft") jumpRel(-1);
 });
 
 var facetOptions = new Map();   // label → url
@@ -258,6 +539,14 @@ function calcMinMax(arr){
     if(x<xmin) xmin=x; if(x>xmax) xmax=x;
     if(y<ymin) ymin=y; if(y>ymax) ymax=y;
   }
+  var xSpan = xmax - xmin;
+  // puff out a little so things aren't on border
+  xmin -= xSpan*0.03;
+  xmax += xSpan*0.03;
+  var ySpan = ymax - ymin;
+  // puff out a little so things aren't on border
+  ymin -= ySpan*0.03;
+  ymax += ySpan*0.03;
   return {xmin,xmax,ymin,ymax};
 }
 
@@ -276,7 +565,6 @@ const hullColors = [
 
 function addHull(node){
   if (!node.__concaveHull || !curPoints.length) return;
-  console.log("Adding hull with " + node.__concaveHull.length + " points");
   const p = join(node.__pathArr);
   if (hullVisible.has(p)) return;
   hullVisible.set(p,{idx:node.__concaveHull,
@@ -298,6 +586,7 @@ function pointInPoly(poly, x, y){
   return c;
 }
 
+    var cachedPlot = null;
 // ────────────────────────────────────────────────────────────────
 //  Replaces the previous drawPoints()
 //  – draws all points bright
@@ -332,52 +621,67 @@ function drawPoints() {
     const py = (y - ymin) * sy;
     plotCtx.fillRect(px - 1, py - 1, 2, 2);
   }
-  
-  /* ---------- step 3: draw coloured hull polygons themselves ---------- */
-// how many CSS pixels you want the shape to grow OUTWARD
-const PUFF = 6;                 // try 4-10 and tweak to taste
+      
+      /* ---------- step 3: draw coloured hull polygons themselves ---------- */
+    // how many CSS pixels you want the shape to grow OUTWARD
+    const PUFF = 6;                 // try 4-10 and tweak to taste
+    for (const [path, { idx, facetI, color }] of hullVisible) {
 
-for (const [path, { idx, facetI, color }] of hullVisible) {
+      if (facetIToStr[facetI] !== plotSelect.value) continue; // only active facet
 
-  if (facetIToStr[facetI] !== plotSelect.value) continue; // only active facet
+      /* -------------------------------------------------------
+         BUILD THE PATH (unchanged)
+      ------------------------------------------------------- */
+      plotCtx.beginPath();
+      idx.forEach((i, j) => {
+        const [x, y] = curPoints[i];
+        const px = (x - xmin) * sx;
+        const py = (y - ymin) * sy;
+        j ? plotCtx.lineTo(px, py) : plotCtx.moveTo(px, py);
+      });
+      plotCtx.closePath();
 
-  /* -------------------------------------------------------
-     BUILD THE PATH (unchanged)
-  ------------------------------------------------------- */
-  plotCtx.beginPath();
-  idx.forEach((i, j) => {
-    const [x, y] = curPoints[i];
-    const px = (x - xmin) * sx;
-    const py = (y - ymin) * sy;
-    j ? plotCtx.lineTo(px, py) : plotCtx.moveTo(px, py);
-  });
-  plotCtx.closePath();
+      /* -------------------------------------------------------
+         1) FAT STROKE IN FILL COLOUR  → gives the “puff”
+      ------------------------------------------------------- */
+      plotCtx.save();                   // isolate our tweaks
+      plotCtx.strokeStyle = color;      // same colour as fill
+      plotCtx.lineJoin    = "round";    // softer corners
+      plotCtx.lineWidth   = PUFF * 2;   // outward growth = PUFF
+      plotCtx.stroke();
 
-  /* -------------------------------------------------------
-     1) FAT STROKE IN FILL COLOUR  → gives the “puff”
-  ------------------------------------------------------- */
-  plotCtx.save();                   // isolate our tweaks
-  plotCtx.strokeStyle = color;      // same colour as fill
-  plotCtx.lineJoin    = "round";    // softer corners
-  plotCtx.lineWidth   = PUFF * 2;   // outward growth = PUFF
-  plotCtx.stroke();
+      /* -------------------------------------------------------
+         2) NORMAL FILL  (hides the inner half of the fat stroke)
+      ------------------------------------------------------- */
+      plotCtx.fillStyle = color;
+      plotCtx.fill();
 
-  /* -------------------------------------------------------
-     2) NORMAL FILL  (hides the inner half of the fat stroke)
-  ------------------------------------------------------- */
-  plotCtx.fillStyle = color;
-  plotCtx.fill();
+      /* -------------------------------------------------------
+         3) OPTIONAL CRISP OUTLINE
+            comment-out if you don’t want an edge
+      ------------------------------------------------------- */
+      plotCtx.lineWidth   = 1.5;
+      plotCtx.strokeStyle = "#00000088"; // translucent black
+      plotCtx.stroke();
 
-  /* -------------------------------------------------------
-     3) OPTIONAL CRISP OUTLINE
-        comment-out if you don’t want an edge
-  ------------------------------------------------------- */
-  plotCtx.lineWidth   = 1.5;
-  plotCtx.strokeStyle = "#00000088"; // translucent black
-  plotCtx.stroke();
+      plotCtx.restore();                // restore previous state
+    }
+    
+    /* ---------- selection rectangle overlay ---------- */
+    if (selRect) {
+      const { minX, maxX, minY, maxY } = selRect;
+      plotCtx.lineWidth = 3;
+      plotCtx.strokeStyle = '#ff7675';
+      plotCtx.setLineDash([8]);
+      plotCtx.strokeRect(minX, minY, maxX - minX, maxY - minY);
 
-  plotCtx.restore();                // restore previous state
-}
+      // fluffy fill
+      plotCtx.fillStyle = '#ff767540';   // translucent red
+      plotCtx.fillRect(minX, minY, maxX - minX, maxY - minY);
+    }
+        
+    cachedPlot = plotCtx.getImageData(0, 0, plotCanvas.width, plotCanvas.height);
+
 }
 
 function resizeCanvas() {
@@ -385,32 +689,183 @@ function resizeCanvas() {
   drawPoints();   // repaint with the new scale
 }
 
-plotCanvas.addEventListener('click',ev=>{
-  const rect = plotCanvas.getBoundingClientRect(),
-        dpr  = 1,
-        cx   = (ev.clientX-rect.left)*dpr,
-        cy   = (ev.clientY-rect.top )*dpr;
-  const {xmin,xmax,ymin,ymax}=xyMinMax,
-        sx = xmax===xmin?1:plotCanvas.width /(xmax-xmin),
-        sy = ymax===ymin?1:plotCanvas.height/(ymax-ymin),
-        dx = x=>xmin+x/sx,
-        dy = y=>ymax-(y/sy);
-  for (const [path,{idx,facetURL}] of hullVisible){
-    if (facetURL!==plotSelect.value) continue;
-    const poly = idx.map(i=>curPoints[i]);
-    if (pointInPoly(poly,dx(cx),dy(cy))){
-       const det = pathMap.get(path);
-       if(det && !det.open){
-         det.open = true;       // triggers toggle & redraw
-       }
-       break;
-    }
+/* ─── box selection on the same canvas ─────────────────────────── */
+let dragging = false, sx = 0, sy = 0;
+
+function clientToCanvas(ev) {
+  const rect = plotCanvas.getBoundingClientRect();
+  const p = plotCtx.getTransform().inverse().transformPoint(
+      new DOMPoint(
+        (ev.clientX - rect.left)  / rect.width  * plotCanvas.width,
+        (ev.clientY - rect.top)   / rect.height * plotCanvas.height
+      ));
+  return [p.x, p.y];
+}
+
+function countPointsInRect(minX, maxX, minY, maxY) {
+  const { xmin, xmax, ymin, ymax } = xyMinMax,
+        w  = plotCanvas.width,
+        h  = plotCanvas.height,
+        kx = xmax === xmin ? 1 : w / (xmax - xmin),
+        ky = ymax === ymin ? 1 : h / (ymax - ymin);
+   
+  let inside = 0;
+  for (const [x, y] of curPoints) {
+    const px = (x - xmin) * kx,
+          py = (y - ymin) * ky;
+    if (px >= minX && px <= maxX && py >= minY && py <= maxY) inside++;
   }
+  return inside;
+}
+
+function getPointIndicesInRect(minX, maxX, minY, maxY) {
+  const { xmin, xmax, ymin, ymax } = xyMinMax,
+        w  = plotCanvas.width,
+        h  = plotCanvas.height,
+        kx = xmax === xmin ? 1 : w / (xmax - xmin),
+        ky = ymax === ymin ? 1 : h / (ymax - ymin);
+
+  const hits = [];                         // ← indices go here
+  for (let i = 0; i < curPoints.length; i++) {
+    const [x, y] = curPoints[i];
+    const px = (x - xmin) * kx,
+          py = (y - ymin) * ky;
+    if (px >= minX && px <= maxX && py >= minY && py <= maxY)
+      hits.push(i);
+  }
+  return hits;
+}
+function plotIsMax() {
+  return plotWrap.classList.contains('max');
+}
+/* pointer down  → start rectangle */
+plotCanvas.addEventListener('pointerdown', ev => {
+  ev.preventDefault();            // block page-scroll on mobile
+  if (!cachedPlot || !plotIsMax()) return;                // safety
+  [sx, sy] = clientToCanvas(ev);
+  dragging  = true;
+});
+
+/* pointer move  → redraw cached bitmap + rubber-band */
+plotCanvas.addEventListener('pointermove', ev => {
+  ev.preventDefault();            // block page-scroll on mobile
+  if (!dragging || !plotIsMax()) return;
+  const [cx, cy] = clientToCanvas(ev);
+
+  // restore cached plot
+  plotCtx.putImageData(cachedPlot, 0, 0);
+
+  // rectangle limits
+  const minX = Math.min(sx, cx),
+        maxX = Math.max(sx, cx),
+        minY = Math.min(sy, cy),
+        maxY = Math.max(sy, cy);
+
+  // rubber-band
+  plotCtx.setLineDash([6]);
+  plotCtx.strokeStyle = '#ff7675';
+  plotCtx.strokeRect(sx, sy, cx - sx, cy - sy);
+
+  // live counter
+  const n = countPointsInRect(minX, maxX, minY, maxY);
+  plotCtx.setLineDash([]);                    // solid for text bg
+  plotCtx.fillStyle   = 'rgba(0,0,0,0.65)';
+  const label = `${n} pts`;
+  plotCtx.font = '14px/1 sans-serif';
+  const textW = plotCtx.measureText(label).width + 8;
+  plotCtx.fillRect(minX, minY - 20, textW, 18);   // dark pill
+  plotCtx.fillStyle = '#ffffff';
+  plotCtx.fillText(label, minX + 4, minY - 6);    // white text
+});
+
+/* pointer up    → count points, restore bitmap */
+plotCanvas.addEventListener('pointerup', async ev => {
+  ev.preventDefault();            // block page-scroll on mobile
+  if (!dragging || !plotIsMax()) return;
+  dragging = false;
+
+  const [cx, cy] = clientToCanvas(ev);
+  plotCtx.putImageData(cachedPlot, 0, 0);   // restore
+
+  const minX = Math.min(sx, cx),
+        maxX = Math.max(sx, cx),
+        minY = Math.min(sy, cy),
+        maxY = Math.max(sy, cy);
+
+  const idxs = getPointIndicesInRect(minX, maxX, minY, maxY);
+
+  // convert each point index into {fileI,itemI}
+  const mapping = conversationsMappings.get(plotSelect.value);
+  selResults = idxs.map(i => {
+    const [fileI, itemI] = mapping.indices[i];
+    return {fileI, itemI};
+  });
+
+      // show / hide panel
+    if (selResults.length) {
+      curPage = 0;
+      await renderSelPage(false);
+      selPane.classList.remove('hidden');
+
+      // remember rectangle so we can redraw it
+      selRect = { minX, maxX, minY, maxY };
+    labelFrequencies.clear();
+    wordFrequencies.clear();
+    alreadyProcessed.clear();
+    showTreeToggle(true);      // NEW ← reveal the button
+    plotWrap.classList.add('smol');
+    plotWrap.classList.remove('max');
+    showTree(false);           // hide hierarchy while reviewing selection
+    closeEntireTree();
+    
+    } else {
+      selPane.classList.add('hidden');
+      selRect = null;             // nothing to show
+    showTreeToggle(false);     // NEW ← hide the button
+    showTree(true);           // hide hierarchy while reviewing selection
+    clearSelection();
+    }
+    drawPoints();
+    
+    updateHash();
+});
+
+/* if the user aborts drag by leaving the canvas */
+plotCanvas.addEventListener('pointerleave', () => {
+  if (dragging && cachedPlot) plotCtx.putImageData(cachedPlot, 0, 0);
+  dragging = false;
 });
 
 window.addEventListener('resize', resizeCanvas);
 
+function loadProxyUrl(url) {
+    // you can use this if you want to put your data in another repo
+    //return  url.replace("YOURHTTPPREFIX", "https://raw.githubusercontent.com/YOUR_GITHUB_USER_NAME/YOUR_GITHUB_REPO/main");
+    return url;
+}
+
+
+async function loadConversationsMapping(url) {
+  url = loadProxyUrl(url);
+  // 1. fetch the raw bytes
+  const res    = await fetch(url);
+  const buffer = await res.arrayBuffer();
+
+  // 2. wrap in a DataView (gives per-read endian control)
+  const view   = new DataView(buffer);
+
+  // 3. walk through the bytes, 8-byte stride (4 for x, 4 for y)
+  const pts = [];
+  for (let off = 0; off < view.byteLength; off += 8) {
+    const x = view.getInt32(off,     /*littleEndian=*/ true);
+    const y = view.getInt32(off + 4, /*littleEndian=*/ true);
+    pts.push([x, y]);
+  }
+  return {"indices": pts, "baseUrl": url.replace("conversationsMapping.bin", "")};
+}
+
 async function loadPointsLE(url) {
+  url = loadProxyUrl(url);
   // 1. fetch the raw bytes
   const res    = await fetch(url);
   const buffer = await res.arrayBuffer();
@@ -430,9 +885,7 @@ async function loadPointsLE(url) {
 
 async function addFacetOption(label, url){
   if (facetOptions.has(label)) return;
-  console.log("Add facet option " + label + " " + url);
   facetOptions.set(label, url);
-  console.log(facetOptions);
   plotSelect.appendChild($('option', { value:label }, label));
   //if (plotSelect.selectedIndex === -1){      // first entry
   await loadDraw(url);
@@ -440,21 +893,27 @@ async function addFacetOption(label, url){
   //}
 }
 
-plotSelect.onchange = async () => await loadDraw(facetOptions.get(plotSelect.value));
+plotSelect.onchange = async () => {
+clearSelection();
+await loadDraw(facetOptions.get(plotSelect.value));
+}
 
 var ptsLookup = new Map();
+var minMaxLookup = new Map();
 
 async function loadDraw(url){
   var pts;
   if (ptsLookup.has(url)) {
     pts = ptsLookup.get(url);
+    xyMinMax = minMaxLookup.get(url);
   }
   else {
     pts = await getPoints(url);
-    ptsLookup[url] = pts;
+    ptsLookup.set(url, pts);
+    xyMinMax = calcMinMax(pts);
+    minMaxLookup.set(url, xyMinMax);
   }
   curPoints = pts;
-  xyMinMax  = calcMinMax(pts);
   resizeCanvas();
 }
 
@@ -515,26 +974,28 @@ async function loadPwdViaCredAPI() {
   try {
     // unmediated:true  ⇒ silent auto-sign-in if the user allowed it
     const cred = await navigator.credentials.get({password: true, unmediated: true});
-    console.log(cred);
     return cred ? cred.password : null;
   } catch { return null; }
 }
 
 /* ---------- store (after user enters pwd) ---------- */
 async function savePwdViaCredAPI(pwd) {
+  if (!credAPIAvailable()) { 
+    return false;
+  }  
 
   // We need to supply an “id” (username).  Use something stable:
   const id = location.origin;
 
   const cred = new PasswordCredential({ id, password: pwd });
   try {
-  console.log("Stored password");
     await navigator.credentials.store(cred);   // prompts the user
     return true;
   } catch { return false; }
 }
 
 async function decryptPasswordProtectedFile(url){
+  url = loadProxyUrl(url);
   var res;
   var numRetries = 5;
   for (var retryIter = 0; retryIter < numRetries; retryIter++) {
@@ -557,7 +1018,6 @@ async function decryptPasswordProtectedFile(url){
                     password  = prompt(promptStr);
                 }
             }
-            console.log(password);
           const u8  = new Uint8Array(arrayBuf);
           const dv  = new DataView(arrayBuf);
 
@@ -626,15 +1086,20 @@ const facetCount=f=>Array.isArray(f.hierarchy)?f.hierarchy.reduce((s,c)=>s+count
 
 const PASSWORD_PROTECTED = ISPASSWORDPROTECTED;
 const ROOT="ROOTOBJECTSJSON";
-const ROOTPOINTS="ROOTPOINTS";
+const POINTS_FILE="ROOTPOINTS";
 const pathMap=new Map();
 let openConvHash=null;
 
+var conversationsMappings = new Map();
+
 var facetIToStr = {};
+
+var RAW_EMBEDDING_NAME = "Conversation Embeddings";
 
 /* ───────── root build ───────── */
 window.onload=()=>fetchJson(ROOT).then(buildFacets);
 async function buildFacets(raw){
+  await addFacetOption(RAW_EMBEDDING_NAME, POINTS_FILE);
   const facets=[...raw].sort((a,b)=>facetCount(b)-facetCount(a));
   const root=document.getElementById('treeRoot'); root.innerHTML='';
   for (var fi = 0; fi < facets.length; fi++) {
@@ -656,10 +1121,19 @@ async function buildFacets(raw){
       await addFacetOption(f.facet?.name, f.points);
       details.__pointsLoaded = true;
     }
+    if(f.conversationsMapping) {
+        var mapping = await loadConversationsMapping(f.conversationsMapping);
+       // use the first mapping for the raw embeddings as well
+       if (!conversationsMappings.has(RAW_EMBEDDING_NAME)) {
+            conversationsMappings.set(RAW_EMBEDDING_NAME, mapping);
+       }
+       conversationsMappings.set(f.facet?.name, mapping);
+    }
     details.__pathArr=[`f${fi}`];
     details.addEventListener('toggle',handleToggle);
     pathMap.set('f'+fi,details);
     root.appendChild(li);
+    
   }
   restoreFromHash();
   resizeCanvas();
@@ -667,7 +1141,7 @@ async function buildFacets(raw){
 
 
 /* ───────── builders ───────── */
-async function buildNode(faceti,item,pathArr,siblingTotal){
+async function buildNode(faceti,item,pathArr,siblingTotal, rootConvs){
   if(isPlaceholder(item)) return await buildPlaceholder(faceti,item,pathArr,siblingTotal);
   const p=join(pathArr);
   const details=$('details',{}); pathMap.set(p,details);
@@ -682,6 +1156,7 @@ async function buildNode(faceti,item,pathArr,siblingTotal){
   details.__pathArr=pathArr;
   details.__concaveHull=item.concaveHull;
   details.__faceti = faceti;
+  details.__rootConvs = rootConvs; 
   if (details.__concaveHull){
       // ① eye in the <summary>
       const eye = $('span',
@@ -709,7 +1184,7 @@ async function buildPlaceholder(faceti,ph,pathArr,siblingTotal){
   else {
     data=await fetchJsonGz(url);
   }
-  return (data.children||data.conversations) ?  await buildNode(faceti,data,pathArr,siblingTotal) : buildLeaf(url,data);
+  return (data.children||data.conversations) ?  await buildNode(faceti,data,pathArr,siblingTotal, data.conversationsData) : buildLeaf(url,data);
 }
 function buildLeaf(url,data){
   const d=$('details',{},$('summary',{},url.split('/').pop()));
@@ -740,7 +1215,7 @@ async function handleToggle(e){
             spinnerChild = $('li',{},spinner());
             ul.appendChild(spinnerChild);
         }
-        var childNode = await buildNode(det.__faceti, ch,[...det.__pathArr,i],childTotal);
+        var childNode = await buildNode(det.__faceti, ch,[...det.__pathArr,i],childTotal,det.__rootConvs);
         if (isPlaceholder(ch)) {
             spinnerChild.replaceWith(childNode);
         }
@@ -753,10 +1228,14 @@ async function handleToggle(e){
     if(det.__convs && !det.__convsBuilt){
       const cDet=$('details',{},$('summary',{},`Conversations (${det.__convs.length})`));
       const cUL=$('ul',{class:'tree'});
+      
       det.__convs.forEach((c,i)=>{
-        const ent=$('details',{},$('summary',{},c.facetValue||`Conversation #${i+1}`));
+        const ent=$('details',{},$('summary',{},det.__rootConvs[c].facetValue||`Conversation #${i+1}`));
         ent.firstChild.addEventListener('click',ev=>{
-          ev.stopPropagation();openConversation(c,det.__pathArr,i);
+          treeNavArr = det.__convs;
+          treeRootConvs = det.__rootConvs;
+          curItem = i;
+          ev.stopPropagation();openConversation(c,det.__pathArr,i,det.__rootConvs);
         });
         cUL.appendChild($('li',{},ent));
       });
@@ -797,7 +1276,10 @@ document.querySelector('.closeBtn').onclick=closeConversation;
 modalWrap.addEventListener('click',e=>{if(e.target===modalWrap)closeConversation();});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeConversation();});
 
-function openConversation(obj,pathArr,idx){
+function openConversation(obj,pathArr,idx,convsArr){
+  obj = convsArr[obj];
+  treeNavPath = pathArr;
+  updateModalNav(treeNavArr.length, idx);   // enable / disable arrows
   openConvHash=`c!${join(pathArr)}!${idx}`;
   convContent.innerHTML='';
   if(obj.allFacetValues?.length){
@@ -819,6 +1301,7 @@ function openConversation(obj,pathArr,idx){
   updateHash();
 }
 function closeConversation(){
+    selConvFile = selConvItem = -1;
   if(!modalWrap.classList.contains('show'))return;
   modalWrap.classList.remove('show');
   setTimeout(()=>modalWrap.classList.add('hidden'),250);
@@ -848,9 +1331,28 @@ window.addEventListener("hashchange", function(event) {
 /* ───────── hash sync ───────── */
 function updateHash(){
   if(!modifyHashAllowed)return;
-  const open=[...pathMap.entries()].filter(([,d])=>d.open).map(([p])=>p);
-  if(openConvHash)open.push(openConvHash);
-  hashStr = [...open].join(',');
+  const tokens = [...pathMap.entries()]
+                  .filter(([,d]) => d.open)
+                  .map(([p]) => p);
+
+  if (openConvHash) tokens.push(openConvHash);
+  
+  if (selRect) {
+    const {minX,minY,maxX,maxY} = selRect;
+    
+  const w = plotCanvas.width , h = plotCanvas.height;
+  const nx1 = (minX/w).toFixed(4),
+        ny1 = (minY/h).toFixed(4),
+        nx2 = (maxX/w).toFixed(4),
+        ny2 = (maxY/h).toFixed(4);
+  tokens.push(`r!${nx1}=${ny1}=${nx2}=${ny2}`);
+    tokens.push(`p!${curPage|0}`);
+    if (selConvFile >= 0)
+      tokens.push(`s!${selConvFile}.${selConvItem}`);
+  }
+  tokens.push(`fa!${encodeURIComponent(plotSelect.value)}`);
+  
+  hashStr = [...tokens].join(',');
   const compressedBase64 = LZUTF8.encodeBase64(LZUTF8.compress(hashStr));
   curHash = "#" + encodeURIComponent(compressedBase64);
   window.location.hash = curHash;
@@ -875,46 +1377,382 @@ async function expandPath(pathStr){
 }
 
 async function restoreFromHash(){
-  modifyHashAllowed=false;
-  hashStr = window.location.hash;
-  if (hashStr.length > 0) {
-    try {
-      hashStr = decodeURIComponent(hashStr.substring(1)) // remove #
-      hashStr = LZUTF8.decompress(LZUTF8.decodeBase64(hashStr), { inputEncoding: "ByteArray", outputEncoding: "String" });
-    }
-    catch {
-      hashStr = ""
-    }
-  }
-  curHash = window.location.hash;
 
-  const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
-  const convSeg=segs.find(s=>s.startsWith('c!'));
+loading.classList.remove('hidden');        // ① show spinner
+setLoad('loading tree state…');
+try {
+      modifyHashAllowed=false;
+      hashStr = window.location.hash;
+      if (hashStr.length > 0) {
+        try {
+          hashStr = decodeURIComponent(hashStr.substring(1)) // remove #
+          hashStr = LZUTF8.decompress(LZUTF8.decodeBase64(hashStr), { inputEncoding: "ByteArray", outputEncoding: "String" });
+        }
+        catch {
+          hashStr = ""
+        }
+      }
+      curHash = window.location.hash;
+        var facetTok = null, rectTok = null, pageTok = null, selConvTok = null;
+      const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
+      const convSeg=segs.find(s=>s.startsWith('c!'));
 
-  const catSegs=[], convListSegs=[];
-  segs.filter(s=>s && s!==convSeg).forEach(p=>{
-    p.endsWith('$c')?convListSegs.push(p):catSegs.push(p);
-  });
+      const catSegs=[], convListSegs=[];
+      
+      segs.forEach(s=>{
+      if (s.startsWith('fa!'))  facetTok = s;
+      else if (s.startsWith('r!'))      rectTok    = s;
+      else if (s.startsWith('p!')) pageTok    = s;
+      else if (s.startsWith('s!'))selConvTok = s;
+      else if (s && s!==convSeg){
+        s.endsWith('$c') ? convListSegs.push(s) : catSegs.push(s);
+      }
+    });
 
+      for(const p of [...catSegs].sort((a,b)=>a.split('.').length-b.split('.').length)){
+        await expandPath(p);
+      }
 
-  for(const p of [...catSegs].sort((a,b)=>a.split('.').length-b.split('.').length)){
-    await expandPath(p);
-  }
+      convListSegs.forEach(key=>{
+        const det=pathMap.get(key);
+        if(det) det.open=true;
+      });
 
-  convListSegs.forEach(key=>{
-    const det=pathMap.get(key);
-    if(det) det.open=true;
-  });
+      if(convSeg){
+        const [,path,idx]=convSeg.split('!');
+        await expandPath(path);
+        const det=pathMap.get(path);
+          treeNavArr = det.__convs;
+          treeRootConvs = det.__rootConvs;
+          curItem = idx;
+          
+            selResults = [];
+        if(det && det.__convs) openConversation(det.__convs[+idx],split(path),+idx,det.__rootConvs);
+      }else closeConversation();
+      modifyHashAllowed=true;
+      
+      /* ---------- facet (plotSelect) ---------- */
+        if (facetTok) {
+          const facetName = decodeURIComponent(facetTok.slice(3));
+          if (plotSelect.value !== facetName && facetOptions.has(facetName)) {
+            plotSelect.value = facetName;
+            await loadDraw(facetOptions.get(facetName));   // loads points for that facet
+          }
+        }
+              /* ---------- restore marquee & selection list ---------- */
+        if (!convSeg && rectTok){
+           // we do floats so difference canvas width and height are preserved
+          const [nx1,ny1,nx2,ny2] = rectTok.slice(2).split('=').map(parseFloat);
+          const w = plotCanvas.width , h = plotCanvas.height;
+          const minX = nx1 * w,  minY = ny1 * h,
+                maxX = nx2 * w,  maxY = ny2 * h;
+          selRect = { minX, maxX, minY, maxY };
+          const idxs   = getPointIndicesInRect(minX,maxX,minY,maxY);
+          const mapping = conversationsMappings.get(plotSelect.value);
+          selResults = idxs.map(i=>({fileI:mapping.indices[i][0],
+                                     itemI:mapping.indices[i][1]}));
 
-  if(convSeg){
-    const [,path,idx]=convSeg.split('!');
-    await expandPath(path);
-    const det=pathMap.get(path);
-    if(det && det.__convs) openConversation(det.__convs[+idx],split(path),+idx);
-  }else closeConversation();
-  modifyHashAllowed=true;
+          curPage = pageTok ? +pageTok.slice(2) : 0;
+          await renderSelPage(true);
+          selPane.classList.remove('hidden');
+          plotWrap.classList.add('smol');
+          drawPoints();
+          showTree(false);
+          showTreeToggle(true);
+        }
+
+        /* ---------- optionally reopen the modal ---------- */
+        if (!convSeg && selConvTok){
+          const [f,i] = selConvTok.slice(2).split('.').map(Number);
+          loadAndShowConversation(f, i);         // uses spinner, keeps state
+        }
+      
+   }
+   finally {
+        loading.classList.add('hidden');        // ① show spinner
+   }
+  
 }
 
+
+/* return the cached array for that data file or undefined     */
+function cachedConvs(fileURL){
+  return loadAndShowConversation.cache
+         ? loadAndShowConversation.cache.get(fileURL)
+         : undefined;
+}
+
+var alreadyProcessed = new Set();
+
+var labelFrequencies = new Map();
+
+/* try to replace the label of one <button>                    */
+function maybeUpdateLabel(btn){
+  const fileI = +btn.dataset.f,
+        itemI = +btn.dataset.i,
+        mapping = conversationsMappings.get(plotSelect.value),
+        fileURL = `${mapping.baseUrl}data${fileI}.json.gz`,
+        convArr = cachedConvs(fileURL);
+
+  if (convArr){
+    const cv = convArr[itemI];
+    const label = cv.facetValue ||        // in our datasets
+                  cv.allFacetValues?.[0]?.value;   // fall-back
+    if (label) btn.textContent = label;
+  }
+}
+
+// from https://gist.github.com/sebleier/554280
+commons = "i,me,my,myself,we,our,ours,ourselves,you,your,yours,yourself,yourselves,he,him,his,himself,she,her,hers,herself,it,its,itself,they,them,their,theirs,themselves,what,which,who,whom,this,that,these,those,am,is,are,was,were,be,been,being,have,has,had,having,do,does,did,doing,a,an,the,and,but,if,or,because,as,until,while,of,at,by,for,with,about,against,between,into,through,during,before,after,above,below,to,from,up,down,in,out,on,off,over,under,again,further,then,once,here,there,when,where,why,how,all,any,both,each,few,more,most,other,some,such,no,nor,not,only,own,same,so,than,too,very,s,t,can,will,just,don,should,now".split(",")
+
+var commonWords = new Set();
+for (const common of commons) {
+    commonWords.add(common);
+}
+
+var numUnloaded = 0;
+/* try to replace the label of one <button>                    */
+function storeFrequencies(){
+  var mapping = conversationsMappings.get(plotSelect.value);
+  var newFiles = new Set();
+  var unloadedFiles = new Set();
+  numUnloaded = 0;
+  for (const i of selResults) {
+    if (alreadyProcessed.has(i.fileI)) {
+        continue;
+    }
+    var fileI = i.fileI;
+    var itemI = i.itemI;
+    var fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
+    var convArr = cachedConvs(fileURL);
+    var label = "<unloaded>";
+    if (convArr) {
+        const cv = convArr[itemI];
+        label = cv.facetValue ||        // in our datasets
+                      cv.allFacetValues?.[0]?.value;   // fall-back
+        newFiles.add(i.fileI);
+        if (!labelFrequencies.has(label)) {
+            labelFrequencies.set(label, 0);
+        }
+        labelFrequencies.set(label, labelFrequencies.get(label)+1);
+        
+        
+        // if raw embeddings, do word cloud over conversation contents
+        if (plotSelect.value === RAW_EMBEDDING_NAME) {
+            const cv = convArr[itemI];
+            var convStr = [];
+            for (const turn of cv.conversation) {
+                convStr.push(turn.content);            
+            }
+            label = convStr.join(" ").replace("\n", " ").replace("\r", " ").replace("\t", " ");
+        }
+        
+        for (const word of splitIntoWords(label)) {
+            var wordLower = word.toLowerCase();
+            if (commonWords.has(wordLower)) continue;
+            if (!wordFrequencies.has(wordLower)) {
+                wordFrequencies.set(wordLower, 0);
+            }
+            wordFrequencies.set(wordLower, wordFrequencies.get(wordLower)+1);
+        }
+    }
+    else {
+        unloadedFiles.add(i.fileI);
+        numUnloaded += 1;
+    }
+  }
+  for (var newFile of newFiles) {
+    alreadyProcessed.add(newFile);
+  }
+  
+  if (unloadedFiles.size > 0) {
+    loadAllBtn.textContent = "Load all (" + numUnloaded + " conversations within " + unloadedFiles.size + " files)";
+  }
+  else {
+    loadAllBtnSpace.classList.toggle("hidden", true);
+  }
+  
+   labelFrequencies.set("<unloaded>", numUnloaded);
+}
+
+function renderFrequencies(){
+  storeFrequencies();
+  /* create the box once */
+  let box = document.getElementById('freqBox');
+  if (!box){
+    box = document.createElement('div');
+    box.id = 'freqBox';
+    selPane.appendChild(box);
+  }
+
+  /* sort by descending count */
+  const rows = [...labelFrequencies.entries()]
+               .sort((a,b) => b[1]-a[1])
+               .slice(0, 100);                // top-100;
+
+  /* build chips */
+  box.innerHTML = "";
+  for (const [label,count] of rows){
+    const chip = document.createElement('span');
+    chip.className = 'freqChip';
+    chip.textContent = `${label} (${count})`;
+    box.appendChild(chip);
+  }
+  buildWordCloud();
+}
+function splitIntoWords(s) {
+    return s.split(/[^\p{L}\p{N}\p{Extended_Pictographic}]+/u).filter(subStr => subStr.length > 0);
+}
+
+
+var wordFrequencies = new Map();
+function buildWordCloud(){
+  // Bail out if library not loaded
+  if (typeof WordCloud === 'undefined') return;
+
+    var unloadedStr =  numUnloaded != 0 ? ("(" + numUnloaded + " not loaded yet and ignored, please page over to them)") : "(all loaded)";
+    wordCloudTitle.textContent = "Selected Conversation's " + (plotSelect.value == RAW_EMBEDDING_NAME ? "Text" : plotSelect.value) + " Word Cloud " + unloadedStr;
+
+  // 1.  Take the 100 most frequent labels
+  const rows = [...wordFrequencies.entries()]
+               .sort((a,b) => b[1]-a[1])
+               .slice(0, 100);
+  
+  var total = 0;
+  for (var vals of rows) {
+    total += vals[1];
+  }
+  
+  // need to normalize or they get too big
+  // 2.  Convert to the “list” format WordCloud expects
+  //     [ [word, weight], … ]
+  const wcList = rows.map(([label,count]) => [label, 100*count/total]);
+
+  // 3.  Draw
+  const canvas = document.getElementById('wcCanvas');
+  WordCloud(canvas, {
+    list: wcList,
+    weightFactor: 10,               // tweak size scaling
+    minSize: 8,                     // smallest font (px)
+    backgroundColor: 'rgba(0,0,0,0)', // keep site bg
+    color: (_, weight) => weight > rows[0][1]*0.6 ? '#6ec1ff'
+                                 : weight > rows[0][1]*0.3 ? '#74b9ff'
+                                 : '#9e9e9e',
+    rotateRatio: 0.15,              // few words angled
+    shuffle: false,                 // heavier words first
+    origin: [canvas.width/2, canvas.height/2],
+    drawOutOfBound: false
+  });
+}
+
+/* update every entry currently visible in the list            */
+function updateSelLabels(){
+  [...selList.children].forEach(maybeUpdateLabel);
+  renderFrequencies();                 // ← new
+}
+
+
+/* ──────── 3. after loading a conversation,                */
+/*            refresh the labels for the current page       */
+const _origLoadAndShow = loadAndShowConversation;
+loadAndShowConversation = async function(fileI,itemI){
+  await _origLoadAndShow(fileI,itemI);   // original behaviour
+  updateSelLabels();                     // relabel peers
+};
+
+
+
+
+/* ──────────────────────────────────────────────────────────────
+   0.  tiny helper: return a *Promise* with the conversations
+       of a file, using the same cache and decryption logic that
+       loadAndShowConversation already relies on
+----------------------------------------------------------------*/
+
+function hasConvArrayLoaded(fileI)  {
+  const mapping = conversationsMappings.get(plotSelect.value);
+  const fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
+
+  if (!loadAndShowConversation.cache)
+        loadAndShowConversation.cache = new Map();
+
+  return loadAndShowConversation.cache.has(fileURL);
+}
+
+async function getConvArray(fileI){
+  const mapping = conversationsMappings.get(plotSelect.value);
+  const fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
+
+  if (!loadAndShowConversation.cache)
+        loadAndShowConversation.cache = new Map();
+
+  let arr = loadAndShowConversation.cache.get(fileURL);
+  if (!arr){
+    arr = PASSWORD_PROTECTED
+          ? (await decryptPasswordProtectedFile(fileURL)).conversationsData
+          : (await fetchJsonGz(fileURL)).conversationsData;
+    loadAndShowConversation.cache.set(fileURL, arr);
+  }
+  return arr;
+}
+loadAllBtn.onclick = preloadAllSelectedFiles;
+async function preloadAllSelectedFiles() {
+  if (!selResults.length) return;
+
+  loading.classList.remove('hidden');
+  setLoad('loading files … 0/0');
+
+  /* build unique file-id list */
+  const fileSet = new Set(selResults.map(r => r.fileI).filter(fileI => !hasConvArrayLoaded(fileI)));
+
+  let done = 0;
+  for (const fileI of fileSet) {
+    await getConvArray(fileI);                 // already cached? → returns instantly
+    setLoad(`loading files … ${++done}/${fileSet.size}`);
+  }
+
+  loading.classList.add('hidden');
+
+  /* now every conversation is in RAM → update labels & chips */
+  renderSelPage(false);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   1.  preload every file that appears on the current page
+----------------------------------------------------------------*/
+async function preloadCurrentPage(alreadyLoading){
+  
+    if (!alreadyLoading) loading.classList.remove('hidden');        // ① show spinner
+    setLoad('loading files…');
+  try {
+  
+  
+  const total = selResults.length;
+  const pages = Math.ceil(total / PAGE_SIZE) || 1;
+
+  // clamp page index
+  curPage = Math.min(Math.max(curPage, 0), pages - 1);
+
+  // slice rows for this page
+  const start = curPage * PAGE_SIZE;
+  
+  const rows  = selResults.slice(start, start + PAGE_SIZE);
+  // only load ones we haven't already loaded
+  const fileSet = new Set(rows.map(({fileI, itemI}) => fileI).filter(fileI => !hasConvArrayLoaded(fileI)));
+  var i = 0;
+  for (var fileId of fileSet) {
+     await getConvArray(fileId);
+     setLoad(`loading files … ${i+1}/${fileSet.size}`);
+     i += 1;
+  }
+
+  // once all are cached → relabel buttons
+  updateSelLabels();
+  }
+  finally {
+    if (!alreadyLoading) loading.classList.add('hidden');        // ① show spinner
+  }
+}
 
 
 
