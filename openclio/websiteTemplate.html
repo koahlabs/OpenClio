@@ -262,347 +262,408 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
   <span class="spinner"></span>
 </div>
 <script>
+var selConvFile = -1,
+    selConvItem = -1;
 
-const loadAllBtn = document.getElementById('loadAllBtn');
-const loadAllBtnSpace = document.getElementById('loadAllBtnSpace');
-var selConvFile = -1, selConvItem = -1;
-const loading = document.getElementById('loading');
-var treeNavArr  = null;   // array with the conversations of that node
-var treeNavInd = -1;   // its path in the hierarchy
+var treeNavArr = null; // array with the conversations of that node
+var treeNavInd = -1; // its path in the hierarchy
 var treeRootConvs = null;
 var treeNavPath = null;
 /* ───────── mini-map globals ───────── */
-const plotCanvas  = document.getElementById('plotCanvas');
-const plotCtx     = plotCanvas.getContext('2d');
-const plotWrap    = document.getElementById('plotWrap');
-const plotToggle  = document.getElementById('plotToggle');
-const plotMaxBtn  = document.getElementById('plotMax');
-const plotSelect  = document.getElementById('plotSelect');
+const plotCanvas = document.getElementById('plotCanvas');
+const plotCtx = plotCanvas.getContext('2d');
+const plotWrap = document.getElementById('plotWrap');
+const plotToggle = document.getElementById('plotToggle');
+const plotMaxBtn = document.getElementById('plotMax');
+const plotSelect = document.getElementById('plotSelect');
 
 const plotLeaf = document.getElementById('plotLeaf');
 const plotHideAll = document.getElementById('plotHideAll');
 
-const selPane   = document.getElementById('selPane');
-const selList   = document.getElementById('selList');
-const pager     = document.getElementById('pager');
-const prevPage  = document.getElementById('prevPage');
-const nextPage  = document.getElementById('nextPage');
-const pageInfo  = document.getElementById('pageInfo');
-const pager2     = document.getElementById('pager2');
-const prevPage2  = document.getElementById('prevPage2');
-const nextPage2  = document.getElementById('nextPage2');
-const pageInfo2  = document.getElementById('pageInfo2');
+const selPane = document.getElementById('selPane');
+const selList = document.getElementById('selList');
+const pager = document.getElementById('pager');
+const prevPage = document.getElementById('prevPage');
+const nextPage = document.getElementById('nextPage');
+const pageInfo = document.getElementById('pageInfo');
+const pager2 = document.getElementById('pager2');
+const prevPage2 = document.getElementById('prevPage2');
+const nextPage2 = document.getElementById('nextPage2');
+const pageInfo2 = document.getElementById('pageInfo2');
 
-const treePane   = document.getElementById('treePane');
+const treePane = document.getElementById('treePane');
 const navPrevBtn = document.getElementById('navPrev');
 const navNextBtn = document.getElementById('navNext');
 const treeTglBtn = document.getElementById('treeToggle');
 
-let selRect = null;   // {minX,maxX,minY,maxY} in canvas pixels
+const loadAllBtn = document.getElementById('loadAllBtn');
+const loadAllBtnSpace = document.getElementById('loadAllBtnSpace');
+const loading = document.getElementById('loading');
+
+let selRect = null; // {minX,maxX,minY,maxY} in canvas pixels
+
+function setLoad(txt) {
+    loadMsg.textContent = txt;
+}
 const loadMsg = document.getElementById('loadMsg');
-function setLoad(txt){ loadMsg.textContent = txt; }
 
 const wordCloudTitle = document.getElementById("wordCloudTitle");
 
-function closeEntireTree(){
-    
-}
 
-function showTreeToggle(yes){
+function showTreeToggle(yes) {
     loadAllBtnSpace.classList.toggle("hidden", !yes);
-  treeTglBtn.classList.toggle('hidden', !yes);
-}
-function clearSelection(){
-  selResults = [];
-  selRect    = null;
-  selPane.classList.add('hidden');
-  drawPoints();
-  showTreeToggle(false);
-  showTree(true);
-  updateHash();
+    treeTglBtn.classList.toggle('hidden', !yes);
 }
 
-function showTree(yes){
-  if (yes) {
-    treePane.classList.remove('hide');
-  }
-  else {
-    treePane.classList.add('hide');
-  }
-  treeTglBtn.textContent = yes ? 'hide tree' : '📂 tree';
+function clearSelection() {
+    selResults = [];
+    selRect = null;
+    selPane.classList.add('hidden');
+    drawPoints();
+    showTreeToggle(false);
+    showTree(true);
+    updateHash();
+}
+
+function showTree(yes) {
+    if (yes) {
+        treePane.classList.remove('hide');
+    } else {
+        treePane.classList.add('hide');
+    }
+    treeTglBtn.textContent = yes ? 'hide tree' : '📂 tree';
 }
 treeTglBtn.onclick = clearSelection;
-document.addEventListener('keydown', e=>{
-  if (e.key==='t' && !treeTglBtn.classList.contains('hidden')) clearSelection();
+document.addEventListener('keydown', e => {
+    if (e.key === 't' && !treeTglBtn.classList.contains('hidden')) clearSelection();
 });
-document.addEventListener('keydown', e=>{ if(e.key==='t') treeTglBtn.onclick(); });
+document.addEventListener('keydown', e => {
+    if (e.key === 't') treeTglBtn.onclick();
+});
 
 
-function updateModalNav(idxTotal, idxNow){
-  navPrevBtn.disabled = idxNow === 0;
-  navNextBtn.disabled = idxNow === idxTotal-1;
+function updateModalNav(idxTotal, idxNow) {
+    navPrevBtn.disabled = idxNow === 0;
+    navNextBtn.disabled = idxNow === idxTotal - 1;
 }
 
-navPrevBtn.onclick = ()=> jumpRel(-1);
-navNextBtn.onclick = ()=> jumpRel(+1);
+navPrevBtn.onclick = () => jumpRel(-1);
+navNextBtn.onclick = () => jumpRel(+1);
 
 function jumpRel(delta) {
 
-  /* 1 – if modal came from a box selection */
-  if (selResults.length) {
-    const pos  = selResults.findIndex(({fileI, itemI}) =>
-                  fileI === curFile && itemI === curItem);
-    if (pos < 0) return;
-    const next = selResults[pos + delta];
-    if (next) loadAndShowConversation(next.fileI, next.itemI);
-    return;
-  }
-
-  /* 2 – if modal came from the tree view */
-  if (treeNavArr) {
-    const nextIdx = parseInt(curItem) + delta;
-    if (nextIdx >= 0 && nextIdx < treeNavArr.length) {
-        curItem = nextIdx;
-        openConversation(treeNavArr[nextIdx], treeNavPath, nextIdx, treeRootConvs);
+    /* 1 – if modal came from a box selection */
+    if (selResults.length) {
+        const pos = selResults.findIndex(({
+                fileI,
+                itemI
+            }) =>
+            fileI === curFile && itemI === curItem);
+        if (pos < 0) return;
+        const next = selResults[pos + delta];
+        if (next) loadAndShowConversation(next.fileI, next.itemI);
+        return;
     }
-  }
+
+    /* 2 – if modal came from the tree view */
+    if (treeNavArr) {
+        const nextIdx = parseInt(curItem) + delta;
+        if (nextIdx >= 0 && nextIdx < treeNavArr.length) {
+            curItem = nextIdx;
+            openConversation(treeNavArr[nextIdx], treeNavPath, nextIdx, treeRootConvs);
+        }
+    }
 }
 
-let curFile = -1, curItem = -1;   // remember what the modal shows
+let curFile = -1,
+    curItem = -1; // remember what the modal shows
 
 const PAGE_SIZE = 50;
-let   selResults = [];   // [{fileI, itemI}, …]
-let   curPage    = 0;
+let selResults = []; // [{fileI, itemI}, …]
+let curPage = 0;
 
 async function renderSelPage(alreadyLoading) {
-  const total = selResults.length;
-  const pages = Math.ceil(total / PAGE_SIZE) || 1;
+    const total = selResults.length;
+    const pages = Math.ceil(total / PAGE_SIZE) || 1;
 
-  // clamp page index
-  curPage = Math.min(Math.max(curPage, 0), pages - 1);
+    // clamp page index
+    curPage = Math.min(Math.max(curPage, 0), pages - 1);
 
-  // slice rows for this page
-  const start = curPage * PAGE_SIZE;
-  const rows  = selResults.slice(start, start + PAGE_SIZE);
+    // slice rows for this page
+    const start = curPage * PAGE_SIZE;
+    const rows = selResults.slice(start, start + PAGE_SIZE);
 
-  selList.innerHTML = '';
-  rows.forEach(({fileI, itemI}, i) => {
-    const btn = document.createElement('button');
-    btn.dataset.f = fileI;          // ← NEW
-    btn.dataset.i = itemI;          // ← NEW
-    btn.textContent = `conv ${start + i + 1}`;
-    btn.onclick = () => loadAndShowConversation(fileI, itemI);
-    selList.appendChild(btn);
-    selList.appendChild(document.createElement("br"));
-  });
+    selList.innerHTML = '';
+    rows.forEach(({
+        fileI,
+        itemI
+    }, i) => {
+        const btn = document.createElement('button');
+        btn.dataset.f = fileI; // ← NEW
+        btn.dataset.i = itemI; // ← NEW
+        btn.textContent = `conv ${start + i + 1}`;
+        btn.onclick = () => loadAndShowConversation(fileI, itemI);
+        selList.appendChild(btn);
+        selList.appendChild(document.createElement("br"));
+    });
 
-  // pager
-  pageInfo.textContent = `${curPage + 1} / ${pages}`;
-  pageInfo2.textContent = `${curPage + 1} / ${pages}`;
-  pager.classList.toggle('hidden', pages === 1);
-  pager2.classList.toggle('hidden', pages === 1);
-  prevPage.disabled = curPage === 0;
-  prevPage2.disabled = curPage === 0;
-  nextPage.disabled = curPage === pages - 1;
-  nextPage2.disabled = curPage === pages - 1;
-  
-  updateSelLabels();                               // then fix labels
-  await preloadCurrentPage(alreadyLoading);     // ensure data + update labels
+    // pager
+    pageInfo.textContent = `${curPage + 1} / ${pages}`;
+    pageInfo2.textContent = `${curPage + 1} / ${pages}`;
+    pager.classList.toggle('hidden', pages === 1);
+    pager2.classList.toggle('hidden', pages === 1);
+    prevPage.disabled = curPage === 0;
+    prevPage2.disabled = curPage === 0;
+    nextPage.disabled = curPage === pages - 1;
+    nextPage2.disabled = curPage === pages - 1;
+
+    await preloadCurrentPage(alreadyLoading); // ensure data + update labels
+    [...selList.children].forEach(maybeUpdateLabel);
+    storeFrequencies();
+    renderFrequencies();
+    buildWordCloud();
 }
-prevPage.onclick = async () => { curPage--; await renderSelPage(false); };
-nextPage.onclick = async () => { curPage++; await renderSelPage(false); };
-prevPage2.onclick = async () => { curPage--; await renderSelPage(false); };
-nextPage2.onclick = async () => { curPage++; await renderSelPage(false); };
+prevPage.onclick = async () => {
+    curPage--;
+    await renderSelPage(false);
+};
+nextPage.onclick = async () => {
+    curPage++;
+    await renderSelPage(false);
+};
+prevPage2.onclick = async () => {
+    curPage--;
+    await renderSelPage(false);
+};
+nextPage2.onclick = async () => {
+    curPage++;
+    await renderSelPage(false);
+};
 
 async function loadAndShowConversation(fileI, itemI) {
-  curFile = fileI;  curItem = itemI;
+    curFile = fileI;
+    curItem = itemI;
 
-  loading.classList.remove('hidden');        // ① show spinner
+    loading.classList.remove('hidden'); // ① show spinner
 
-  try {
-    const mapping = conversationsMappings.get(plotSelect.value);
-    const baseURL = mapping.baseUrl;
-    const fileURL = `${baseURL}data${fileI}.json.gz`;
+    try {
+        const mapping = conversationsMappings.get(plotSelect.value);
+        const baseURL = mapping.baseUrl;
+        const fileURL = `${baseURL}data${fileI}.json.gz`;
 
-    if (!loadAndShowConversation.cache) loadAndShowConversation.cache = new Map();
-    let convArr = loadAndShowConversation.cache.get(fileURL);
-    if (!convArr) {
-      convArr = PASSWORD_PROTECTED
-        ? (await decryptPasswordProtectedFile(fileURL)).conversationsData
-        : (await fetchJsonGz(fileURL)).conversationsData;
-      loadAndShowConversation.cache.set(fileURL, convArr);
+        if (!loadAndShowConversation.cache) loadAndShowConversation.cache = new Map();
+        let convArr = loadAndShowConversation.cache.get(fileURL);
+        if (!convArr) {
+            convArr = PASSWORD_PROTECTED ?
+                (await decryptPasswordProtectedFile(fileURL)).conversationsData :
+                (await fetchJsonGz(fileURL)).conversationsData;
+            loadAndShowConversation.cache.set(fileURL, convArr);
+        }
+
+        openConversationSimple(convArr[itemI]);
+
+        await renderSelPage(true);
+    } finally {
+        loading.classList.add('hidden'); // ② hide spinner
+    }
+}
+
+function openConversationSimple(conversation) {
+    //openConvHash=`c!${join(pathArr)}!${idx}`;
+    convContent.innerHTML = '';
+    if (conversation.allFacetValues?.length) {
+        const colors = ['#ff7675', '#74b9ff', '#55efc4', '#fdcb6e', '#ffeaa7', '#a29bfe', '#fab1a0', '#81ecec'];
+        const box = $('div', {
+            class: 'facets'
+        });
+        conversation.allFacetValues.forEach((fv, i) => {
+            box.appendChild($('div', {
+                    class: 'facetBubble',
+                    style: `background:${colors[i%colors.length]}`
+                },
+                `${fv.facet}: ${fv.value}`));
+        });
+        convContent.appendChild(box);
+    }
+    conversation['conversation'].forEach(m => {
+        const d = $('div', {
+                class: `msg ${m.role}`
+            },
+            $('span', {
+                class: 'role'
+            }, m.role + ': '));
+        const span = $('span', {});
+        span.innerHTML = mdToHtml(m.content);
+        d.appendChild(span);
+        convContent.appendChild(d);
+    });
+    modalWrap.classList.add('show');
+    modalWrap.classList.remove('hidden');
+
+    if (selResults.length) {
+        updateModalNav(selResults.length, selResults.findIndex(r => r.fileI === curFile && r.itemI === curItem));
+        selConvFile = curFile;
+        selConvItem = curItem;
     }
 
-    openConversationSimple(convArr[itemI]);
-  } finally {
-    loading.classList.add('hidden');         // ② hide spinner
-  }
-}
-function openConversationSimple(conversation){
-  //openConvHash=`c!${join(pathArr)}!${idx}`;
-  convContent.innerHTML='';
-  if(conversation.allFacetValues?.length){
-    const colors=['#ff7675','#74b9ff','#55efc4','#fdcb6e','#ffeaa7','#a29bfe','#fab1a0','#81ecec'];
-    const box=$('div',{class:'facets'});
-    conversation.allFacetValues.forEach((fv,i)=>{
-      box.appendChild($('div',{class:'facetBubble',style:`background:${colors[i%colors.length]}`},
-        `${fv.facet}: ${fv.value}`));
-    });
-    convContent.appendChild(box);
-  }
-  conversation['conversation'].forEach(m=>{
-    const d=$('div',{class:`msg ${m.role}`},
-      $('span',{class:'role'},m.role+': '));
-    const span=$('span',{});span.innerHTML=mdToHtml(m.content);
-    d.appendChild(span);convContent.appendChild(d);
-  });
-  modalWrap.classList.add('show');modalWrap.classList.remove('hidden');
-  
-  if (selResults.length) {
-    updateModalNav(selResults.length, selResults.findIndex(r=>r.fileI===curFile && r.itemI===curItem));
-    selConvFile = curFile;
-    selConvItem = curItem;
-  }
-  
-  updateHash();
+    updateHash();
 }
 
 
-function hideAllHulls(){
-  /* 1 – clear the map & repaint */
-  hullVisible.clear();
-  drawPoints();
+function hideAllHulls() {
+    /* 1 – clear the map & repaint */
+    hullVisible.clear();
+    drawPoints();
 
-  /* 2 – dim every eye icon that was on */
-  document.querySelectorAll('.eyeToggle.on')
-          .forEach(el => el.classList.remove('on'));
+    /* 2 – dim every eye icon that was on */
+    document.querySelectorAll('.eyeToggle.on')
+        .forEach(el => el.classList.remove('on'));
 }
 
 plotHideAll.onclick = hideAllHulls;
 
 /* optional keyboard shortcut */
-document.addEventListener('keydown', e=>{
-  if (e.key==='x') hideAllHulls();
-  if (e.key == "ArrowRight") jumpRel(1);
-  if (e.key == "ArrowLeft") jumpRel(-1);
+document.addEventListener('keydown', e => {
+    if (e.key === 'x') hideAllHulls();
+    if (e.key == "ArrowRight") jumpRel(1);
+    if (e.key == "ArrowLeft") jumpRel(-1);
 });
 
-var facetOptions = new Map();   // label → url
-let   curPoints   = [];           // active array  [[x,y],…]
-let   xyMinMax    = null;         // {xmin,xmax,ymin,ymax}
+var facetOptions = new Map(); // label → url
+let curPoints = []; // active array  [[x,y],…]
+let xyMinMax = null; // {xmin,xmax,ymin,ymax}
 
 
-const $=(t,a={},...k)=>{
-  const e=document.createElement(t);
-  for(const [key,val] of Object.entries(a)){
-    if(key.startsWith('on')) e.addEventListener(key.slice(2),val);
-    else if(key==='class') e.className=val;
-    else e.setAttribute(key,val);
-  }
-  k.flat().forEach(c=> {
-  if (c) {
-  
-        e.appendChild(typeof c==='string'?document.createTextNode(c):c);
+const $ = (t, a = {}, ...k) => {
+    const e = document.createElement(t);
+    for (const [key, val] of Object.entries(a)) {
+        if (key.startsWith('on')) e.addEventListener(key.slice(2), val);
+        else if (key === 'class') e.className = val;
+        else e.setAttribute(key, val);
     }
-   });
-  return e;
+    k.flat().forEach(c => {
+        if (c) {
+
+            e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+        }
+    });
+    return e;
 };
-const spinner=()=>$('span',{class:'spinner',title:'Loading…'});
+const spinner = () => $('span', {
+    class: 'spinner',
+    title: 'Loading…'
+});
 async function fetchJson(u) {
-  const res = await fetch(u,{cache:'reload'});
-  if (!res.ok) throw new Error(res.status);
-  // we used compressed jsons
-  return res.json();
+    const res = await fetch(u, {
+        cache: 'reload'
+    });
+    if (!res.ok) throw new Error(res.status);
+    // we used compressed jsons
+    return res.json();
 }
 
 function sleep(seconds) {
-  return new Promise(resolve => setTimeout(resolve, seconds * 1000));
+    return new Promise(resolve => setTimeout(resolve, seconds * 1000));
 }
 
 
 /* ---------- facet-points helpers ---------- */
 
 
-async function toggleHullForNode(node){
-  const p = join(node.__pathArr);
-  const facetName = facetIToStr[node.__faceti];
-  if (plotSelect.value !== facetName){                 // not already selected
-    plotSelect.value = facetName;                      // move the <select>
-    await loadDraw(facetOptions.get(facetName));       // load (if needed)
-  }
-  const eye = node.__eye;
-  if (hullVisible.has(p)){          // currently on → turn off
-    hullVisible.delete(p);
-    eye.classList.remove('on');
-  }else{                            // off → turn on
-    addHull(node);
-    eye.classList.add('on');
-  }
-  drawPoints();
+async function toggleHullForNode(node) {
+    const p = join(node.__pathArr);
+    const facetName = facetIToStr[node.__faceti];
+    if (plotSelect.value !== facetName) { // not already selected
+        plotSelect.value = facetName; // move the <select>
+        await loadDraw(facetOptions.get(facetName)); // load (if needed)
+    }
+    const eye = node.__eye;
+    if (hullVisible.has(p)) { // currently on → turn off
+        hullVisible.delete(p);
+        eye.classList.remove('on');
+    } else { // off → turn on
+        addHull(node);
+        eye.classList.add('on');
+    }
+    drawPoints();
 }
 
-var pointsCache = new Map();             // url → Promise
+var pointsCache = new Map(); // url → Promise
 
-async function getPoints(url){
-  if(!pointsCache.has(url))
-    pointsCache.set(url, await loadPointsLE(url));
-  return pointsCache.get(url);
+async function getPoints(url) {
+    if (!pointsCache.has(url))
+        pointsCache.set(url, await loadPointsLE(url));
+    return pointsCache.get(url);
 }
 
-function calcMinMax(arr){
-  let xmin=+Infinity,xmax=-Infinity,ymin=+Infinity,ymax=-Infinity;
-  for(const [x,y] of arr){
-    if(x<xmin) xmin=x; if(x>xmax) xmax=x;
-    if(y<ymin) ymin=y; if(y>ymax) ymax=y;
-  }
-  var xSpan = xmax - xmin;
-  // puff out a little so things aren't on border
-  xmin -= xSpan*0.03;
-  xmax += xSpan*0.03;
-  var ySpan = ymax - ymin;
-  // puff out a little so things aren't on border
-  ymin -= ySpan*0.03;
-  ymax += ySpan*0.03;
-  return {xmin,xmax,ymin,ymax};
+function calcMinMax(arr) {
+    let xmin = +Infinity,
+        xmax = -Infinity,
+        ymin = +Infinity,
+        ymax = -Infinity;
+    for (const [x, y] of arr) {
+        if (x < xmin) xmin = x;
+        if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y;
+        if (y > ymax) ymax = y;
+    }
+    var xSpan = xmax - xmin;
+    // puff out a little so things aren't on border
+    xmin -= xSpan * 0.03;
+    xmax += xSpan * 0.03;
+    var ySpan = ymax - ymin;
+    // puff out a little so things aren't on border
+    ymin -= ySpan * 0.03;
+    ymax += ySpan * 0.03;
+    return {
+        xmin,
+        xmax,
+        ymin,
+        ymax
+    };
 }
 
 /* ---------- hull helpers ---------- */
-var hullVisible   = new Map();          // path → {idx,color}
+var hullVisible = new Map(); // path → {idx,color}
 const hullColors = [
-  '#ff767580',   /* red            */
-  '#e1705580',   /* orange-brown   */
-  '#55efc480',   /* green          */
-  '#fdcb6e80',   /* yellow         */
-  '#ffeaa780',   /* pale-yellow    */
-  '#d980fa80',   /* violet         */
-  '#fab1a080',   /* salmon         */
-  '#6c5ce780'    /* indigo         */
+    '#ff767580', /* red            */
+    '#e1705580', /* orange-brown   */
+    '#55efc480', /* green          */
+    '#fdcb6e80', /* yellow         */
+    '#ffeaa780', /* pale-yellow    */
+    '#d980fa80', /* violet         */
+    '#fab1a080', /* salmon         */
+    '#6c5ce780' /* indigo         */
 ];
 
-function addHull(node){
-  if (!node.__concaveHull || !curPoints.length) return;
-  const p = join(node.__pathArr);
-  if (hullVisible.has(p)) return;
-  hullVisible.set(p,{idx:node.__concaveHull,
-                     color:hullColors[hullVisible.size%hullColors.length],
-                     facetI:node.__faceti});
-  drawPoints();             // redraw incl. new hull
-}
-function removeHull(node){
-  hullVisible.delete(join(node.__pathArr));
-  if (node.__eye) node.__eye.classList.remove('on');   // <─ new
-  drawPoints();
-}
-function pointInPoly(poly, x, y){
-  let c = false;
-  for (let i=0,j=poly.length-1;i<poly.length;j=i++)
-    ((poly[i][1]>y)!=(poly[j][1]>y)) &&
-    (x < (poly[j][0]-poly[i][0])*(y-poly[i][1])/(poly[j][1]-poly[i][1])+poly[i][0]) &&
-    (c=!c);
-  return c;
+function addHull(node) {
+    if (!node.__concaveHull || !curPoints.length) return;
+    const p = join(node.__pathArr);
+    if (hullVisible.has(p)) return;
+    hullVisible.set(p, {
+        idx: node.__concaveHull,
+        color: hullColors[hullVisible.size % hullColors.length],
+        facetI: node.__faceti
+    });
+    drawPoints(); // redraw incl. new hull
 }
 
-    var cachedPlot = null;
+function removeHull(node) {
+    hullVisible.delete(join(node.__pathArr));
+    if (node.__eye) node.__eye.classList.remove('on'); // <─ new
+    drawPoints();
+}
+
+function pointInPoly(poly, x, y) {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+        ((poly[i][1] > y) != (poly[j][1] > y)) &&
+        (x < (poly[j][0] - poly[i][0]) * (y - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0]) &&
+        (c = !c);
+    return c;
+}
+
+var cachedPlot = null;
 // ────────────────────────────────────────────────────────────────
 //  Replaces the previous drawPoints()
 //  – draws all points bright
@@ -612,498 +673,571 @@ function pointInPoly(poly, x, y){
 //  – finally fills the hull polygons themselves (as before)
 // ────────────────────────────────────────────────────────────────
 function drawPoints() {
-  if (!curPoints.length) return;
+    if (!curPoints.length) return;
 
-  /* ---------- sizing & scaling ---------- */
-  const cssW = screen.availWidth * 0.9;
-  const cssH = screen.availHeight * 0.8;
-  const dpr  = 1;                       // use window.devicePixelRatio if desired
+    /* ---------- sizing & scaling ---------- */
+    const cssW = screen.availWidth * 0.9;
+    const cssH = screen.availHeight * 0.8;
+    const dpr = 1; // use window.devicePixelRatio if desired
 
-  plotCanvas.width  = cssW * dpr;
-  plotCanvas.height = cssH * dpr;
+    plotCanvas.width = cssW * dpr;
+    plotCanvas.height = cssH * dpr;
 
-  const { width: w, height: h } = plotCanvas;
-  plotCtx.clearRect(0, 0, w, h);
+    const {
+        width: w,
+        height: h
+    } = plotCanvas;
+    plotCtx.clearRect(0, 0, w, h);
 
-  const { xmin, xmax, ymin, ymax } = xyMinMax;
-  const sx = xmax === xmin ? 1 : w / (xmax - xmin);
-  const sy = ymax === ymin ? 1 : h / (ymax - ymin);
+    const {
+        xmin,
+        xmax,
+        ymin,
+        ymax
+    } = xyMinMax;
+    const sx = xmax === xmin ? 1 : w / (xmax - xmin);
+    const sy = ymax === ymin ? 1 : h / (ymax - ymin);
 
 
-  /* ---------- step 1: draw all points, but dimmer ---------- */
+    /* ---------- step 1: draw all points, but dimmer ---------- */
     plotCtx.fillStyle = '#6ec1ff22';
-  for (const [x, y] of curPoints) {
-    const px = (x - xmin) * sx;
-    const py = (y - ymin) * sy;
-    plotCtx.fillRect(px - 1, py - 1, 2, 2);
-  }
-      
-      /* ---------- step 3: draw coloured hull polygons themselves ---------- */
-    // how many CSS pixels you want the shape to grow OUTWARD
-    const PUFF = 6;                 // try 4-10 and tweak to taste
-    for (const [path, { idx, facetI, color }] of hullVisible) {
-
-      if (facetIToStr[facetI] !== plotSelect.value) continue; // only active facet
-
-      /* -------------------------------------------------------
-         BUILD THE PATH (unchanged)
-      ------------------------------------------------------- */
-      plotCtx.beginPath();
-      idx.forEach((i, j) => {
-        const [x, y] = curPoints[i];
+    for (const [x, y] of curPoints) {
         const px = (x - xmin) * sx;
         const py = (y - ymin) * sy;
-        j ? plotCtx.lineTo(px, py) : plotCtx.moveTo(px, py);
-      });
-      plotCtx.closePath();
-
-      /* -------------------------------------------------------
-         1) FAT STROKE IN FILL COLOUR  → gives the “puff”
-      ------------------------------------------------------- */
-      plotCtx.save();                   // isolate our tweaks
-      plotCtx.strokeStyle = color;      // same colour as fill
-      plotCtx.lineJoin    = "round";    // softer corners
-      plotCtx.lineWidth   = PUFF * 2;   // outward growth = PUFF
-      plotCtx.stroke();
-
-      /* -------------------------------------------------------
-         2) NORMAL FILL  (hides the inner half of the fat stroke)
-      ------------------------------------------------------- */
-      plotCtx.fillStyle = color;
-      plotCtx.fill();
-
-      /* -------------------------------------------------------
-         3) OPTIONAL CRISP OUTLINE
-            comment-out if you don’t want an edge
-      ------------------------------------------------------- */
-      plotCtx.lineWidth   = 1.5;
-      plotCtx.strokeStyle = "#00000088"; // translucent black
-      plotCtx.stroke();
-
-      plotCtx.restore();                // restore previous state
+        plotCtx.fillRect(px - 1, py - 1, 2, 2);
     }
-    
+
+    /* ---------- step 3: draw coloured hull polygons themselves ---------- */
+    // how many CSS pixels you want the shape to grow OUTWARD
+    const PUFF = 6; // try 4-10 and tweak to taste
+    for (const [path, {
+            idx,
+            facetI,
+            color
+        }] of hullVisible) {
+
+        if (facetIToStr[facetI] !== plotSelect.value) continue; // only active facet
+
+        /* -------------------------------------------------------
+           BUILD THE PATH (unchanged)
+        ------------------------------------------------------- */
+        plotCtx.beginPath();
+        idx.forEach((i, j) => {
+            const [x, y] = curPoints[i];
+            const px = (x - xmin) * sx;
+            const py = (y - ymin) * sy;
+            j ? plotCtx.lineTo(px, py) : plotCtx.moveTo(px, py);
+        });
+        plotCtx.closePath();
+
+        /* -------------------------------------------------------
+           1) FAT STROKE IN FILL COLOUR  → gives the “puff”
+        ------------------------------------------------------- */
+        plotCtx.save(); // isolate our tweaks
+        plotCtx.strokeStyle = color; // same colour as fill
+        plotCtx.lineJoin = "round"; // softer corners
+        plotCtx.lineWidth = PUFF * 2; // outward growth = PUFF
+        plotCtx.stroke();
+
+        /* -------------------------------------------------------
+           2) NORMAL FILL  (hides the inner half of the fat stroke)
+        ------------------------------------------------------- */
+        plotCtx.fillStyle = color;
+        plotCtx.fill();
+
+        /* -------------------------------------------------------
+           3) OPTIONAL CRISP OUTLINE
+              comment-out if you don’t want an edge
+        ------------------------------------------------------- */
+        plotCtx.lineWidth = 1.5;
+        plotCtx.strokeStyle = "#00000088"; // translucent black
+        plotCtx.stroke();
+
+        plotCtx.restore(); // restore previous state
+    }
+
     /* ---------- selection rectangle overlay ---------- */
     if (selRect) {
-      const { minX, maxX, minY, maxY } = selRect;
-      plotCtx.lineWidth = 3;
-      plotCtx.strokeStyle = '#ff7675';
-      plotCtx.setLineDash([8]);
-      plotCtx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        const {
+            minX,
+            maxX,
+            minY,
+            maxY
+        } = selRect;
+        plotCtx.lineWidth = 3;
+        plotCtx.strokeStyle = '#ff7675';
+        plotCtx.setLineDash([8]);
+        plotCtx.strokeRect(minX, minY, maxX - minX, maxY - minY);
 
-      // fluffy fill
-      plotCtx.fillStyle = '#ff767540';   // translucent red
-      plotCtx.fillRect(minX, minY, maxX - minX, maxY - minY);
+        // fluffy fill
+        plotCtx.fillStyle = '#ff767540'; // translucent red
+        plotCtx.fillRect(minX, minY, maxX - minX, maxY - minY);
     }
-        
+
     cachedPlot = plotCtx.getImageData(0, 0, plotCanvas.width, plotCanvas.height);
 
 }
 
 function resizeCanvas() {
 
-  drawPoints();   // repaint with the new scale
+    drawPoints(); // repaint with the new scale
 }
 
 /* ─── box selection on the same canvas ─────────────────────────── */
-let dragging = false, sx = 0, sy = 0;
+let dragging = false,
+    sx = 0,
+    sy = 0;
 
 function clientToCanvas(ev) {
-  const rect = plotCanvas.getBoundingClientRect();
-  const p = plotCtx.getTransform().inverse().transformPoint(
-      new DOMPoint(
-        (ev.clientX - rect.left)  / rect.width  * plotCanvas.width,
-        (ev.clientY - rect.top)   / rect.height * plotCanvas.height
-      ));
-  return [p.x, p.y];
+    const rect = plotCanvas.getBoundingClientRect();
+    const p = plotCtx.getTransform().inverse().transformPoint(
+        new DOMPoint(
+            (ev.clientX - rect.left) / rect.width * plotCanvas.width,
+            (ev.clientY - rect.top) / rect.height * plotCanvas.height
+        ));
+    return [p.x, p.y];
 }
 
 function countPointsInRect(minX, maxX, minY, maxY) {
-  const { xmin, xmax, ymin, ymax } = xyMinMax,
-        w  = plotCanvas.width,
-        h  = plotCanvas.height,
+    const {
+        xmin,
+        xmax,
+        ymin,
+        ymax
+    } = xyMinMax,
+    w = plotCanvas.width,
+        h = plotCanvas.height,
         kx = xmax === xmin ? 1 : w / (xmax - xmin),
         ky = ymax === ymin ? 1 : h / (ymax - ymin);
-   
-  let inside = 0;
-  for (const [x, y] of curPoints) {
-    const px = (x - xmin) * kx,
-          py = (y - ymin) * ky;
-    if (px >= minX && px <= maxX && py >= minY && py <= maxY) inside++;
-  }
-  return inside;
+
+    let inside = 0;
+    for (const [x, y] of curPoints) {
+        const px = (x - xmin) * kx,
+            py = (y - ymin) * ky;
+        if (px >= minX && px <= maxX && py >= minY && py <= maxY) inside++;
+    }
+    return inside;
 }
 
 function getPointIndicesInRect(minX, maxX, minY, maxY) {
-  const { xmin, xmax, ymin, ymax } = xyMinMax,
-        w  = plotCanvas.width,
-        h  = plotCanvas.height,
+    const {
+        xmin,
+        xmax,
+        ymin,
+        ymax
+    } = xyMinMax,
+    w = plotCanvas.width,
+        h = plotCanvas.height,
         kx = xmax === xmin ? 1 : w / (xmax - xmin),
         ky = ymax === ymin ? 1 : h / (ymax - ymin);
 
-  const hits = [];                         // ← indices go here
-  for (let i = 0; i < curPoints.length; i++) {
-    const [x, y] = curPoints[i];
-    const px = (x - xmin) * kx,
-          py = (y - ymin) * ky;
-    if (px >= minX && px <= maxX && py >= minY && py <= maxY)
-      hits.push(i);
-  }
-  return hits;
+    const hits = []; // ← indices go here
+    for (let i = 0; i < curPoints.length; i++) {
+        const [x, y] = curPoints[i];
+        const px = (x - xmin) * kx,
+            py = (y - ymin) * ky;
+        if (px >= minX && px <= maxX && py >= minY && py <= maxY)
+            hits.push(i);
+    }
+    return hits;
 }
+
 function plotIsMax() {
-  return plotWrap.classList.contains('max');
+    return plotWrap.classList.contains('max');
 }
 /* pointer down  → start rectangle */
 plotCanvas.addEventListener('pointerdown', ev => {
-  ev.preventDefault();            // block page-scroll on mobile
-  if (!cachedPlot || !plotIsMax()) return;                // safety
-  [sx, sy] = clientToCanvas(ev);
-  dragging  = true;
+    ev.preventDefault(); // block page-scroll on mobile
+    if (!cachedPlot || !plotIsMax()) return; // safety
+    [sx, sy] = clientToCanvas(ev);
+    dragging = true;
 });
 
 /* pointer move  → redraw cached bitmap + rubber-band */
 plotCanvas.addEventListener('pointermove', ev => {
-  ev.preventDefault();            // block page-scroll on mobile
-  if (!dragging || !plotIsMax()) return;
-  const [cx, cy] = clientToCanvas(ev);
+    ev.preventDefault(); // block page-scroll on mobile
+    if (!dragging || !plotIsMax()) return;
+    const [cx, cy] = clientToCanvas(ev);
 
-  // restore cached plot
-  plotCtx.putImageData(cachedPlot, 0, 0);
+    // restore cached plot
+    plotCtx.putImageData(cachedPlot, 0, 0);
 
-  // rectangle limits
-  const minX = Math.min(sx, cx),
+    // rectangle limits
+    const minX = Math.min(sx, cx),
         maxX = Math.max(sx, cx),
         minY = Math.min(sy, cy),
         maxY = Math.max(sy, cy);
 
-  // rubber-band
-  plotCtx.setLineDash([6]);
-  plotCtx.strokeStyle = '#ff7675';
-  plotCtx.strokeRect(sx, sy, cx - sx, cy - sy);
+    // rubber-band
+    plotCtx.setLineDash([6]);
+    plotCtx.strokeStyle = '#ff7675';
+    plotCtx.strokeRect(sx, sy, cx - sx, cy - sy);
 
-  // live counter
-  const n = countPointsInRect(minX, maxX, minY, maxY);
-  plotCtx.setLineDash([]);                    // solid for text bg
-  plotCtx.fillStyle   = 'rgba(0,0,0,0.65)';
-  const label = `${n} pts`;
-  plotCtx.font = '14px/1 sans-serif';
-  const textW = plotCtx.measureText(label).width + 8;
-  plotCtx.fillRect(minX, minY - 20, textW, 18);   // dark pill
-  plotCtx.fillStyle = '#ffffff';
-  plotCtx.fillText(label, minX + 4, minY - 6);    // white text
+    // live counter
+    const n = countPointsInRect(minX, maxX, minY, maxY);
+    plotCtx.setLineDash([]); // solid for text bg
+    plotCtx.fillStyle = 'rgba(0,0,0,0.65)';
+    const label = `${n} pts`;
+    plotCtx.font = '14px/1 sans-serif';
+    const textW = plotCtx.measureText(label).width + 8;
+    plotCtx.fillRect(minX, minY - 20, textW, 18); // dark pill
+    plotCtx.fillStyle = '#ffffff';
+    plotCtx.fillText(label, minX + 4, minY - 6); // white text
 });
 
 /* pointer up    → count points, restore bitmap */
 plotCanvas.addEventListener('pointerup', async ev => {
-  ev.preventDefault();            // block page-scroll on mobile
-  if (!dragging || !plotIsMax()) return;
-  dragging = false;
+    ev.preventDefault(); // block page-scroll on mobile
+    if (!dragging || !plotIsMax()) return;
+    dragging = false;
 
-  const [cx, cy] = clientToCanvas(ev);
-  plotCtx.putImageData(cachedPlot, 0, 0);   // restore
+    const [cx, cy] = clientToCanvas(ev);
+    plotCtx.putImageData(cachedPlot, 0, 0); // restore
 
-  const minX = Math.min(sx, cx),
+    const minX = Math.min(sx, cx),
         maxX = Math.max(sx, cx),
         minY = Math.min(sy, cy),
         maxY = Math.max(sy, cy);
 
-  const idxs = getPointIndicesInRect(minX, maxX, minY, maxY);
+    const idxs = getPointIndicesInRect(minX, maxX, minY, maxY);
 
-  // convert each point index into {fileI,itemI}
-  const mapping = conversationsMappings.get(plotSelect.value);
-  selResults = idxs.map(i => {
-    const [fileI, itemI] = mapping.indices[i];
-    return {fileI, itemI};
-  });
+    // convert each point index into {fileI,itemI}
+    const mapping = conversationsMappings.get(plotSelect.value);
+    selResults = idxs.map(i => {
+        const [fileI, itemI] = mapping.indices[i];
+        return {
+            fileI,
+            itemI
+        };
+    });
 
-      // show / hide panel
+    // show / hide panel
     if (selResults.length) {
-      curPage = 0;
-      await renderSelPage(false);
-      selPane.classList.remove('hidden');
+        curPage = 0;
+        selPane.classList.remove('hidden');
 
-      // remember rectangle so we can redraw it
-      selRect = { minX, maxX, minY, maxY };
-    labelFrequencies.clear();
-    wordFrequencies.clear();
-    alreadyProcessed.clear();
-    showTreeToggle(true);      // NEW ← reveal the button
-    plotWrap.classList.add('smol');
-    plotWrap.classList.remove('max');
-    showTree(false);           // hide hierarchy while reviewing selection
-    closeEntireTree();
-    
+        // remember rectangle so we can redraw it
+        selRect = {
+            minX,
+            maxX,
+            minY,
+            maxY
+        };
+        labelFrequencies.clear();
+        wordFrequencies.clear();
+        alreadyProcessed.clear();
+        showTreeToggle(true); // NEW ← reveal the button
+        plotWrap.classList.add('smol');
+        plotWrap.classList.remove('max');
+        showTree(false); // hide hierarchy while reviewing selection
+
+        await renderSelPage(false);
+
     } else {
-      selPane.classList.add('hidden');
-      selRect = null;             // nothing to show
-    showTreeToggle(false);     // NEW ← hide the button
-    showTree(true);           // hide hierarchy while reviewing selection
-    clearSelection();
+        selPane.classList.add('hidden');
+        selRect = null; // nothing to show
+        showTreeToggle(false); // NEW ← hide the button
+        showTree(true); // hide hierarchy while reviewing selection
+        clearSelection();
     }
     drawPoints();
-    
+
     updateHash();
 });
 
 /* if the user aborts drag by leaving the canvas */
 plotCanvas.addEventListener('pointerleave', () => {
-  if (dragging && cachedPlot) plotCtx.putImageData(cachedPlot, 0, 0);
-  dragging = false;
+    if (dragging && cachedPlot) plotCtx.putImageData(cachedPlot, 0, 0);
+    dragging = false;
 });
 
 window.addEventListener('resize', resizeCanvas);
 
 function loadProxyUrl(url) {
     //return  url.replace("YOURHTTPPREFIX", "https://raw.githubusercontent.com/YOUR_GITHUB_USER_NAME/YOUR_GITHUB_REPO/main");
+    return url.replace("/modelwelfare/cyborgism", "https://raw.githubusercontent.com/Phylliida/cyborgismClio/update1")
     //return url;
 }
 
 
 async function loadConversationsMapping(url) {
-  url = loadProxyUrl(url);
-  // 1. fetch the raw bytes
-  const res    = await fetch(url);
-  const buffer = await res.arrayBuffer();
+    url = loadProxyUrl(url);
+    // 1. fetch the raw bytes
+    const res = await fetch(url);
+    const buffer = await res.arrayBuffer();
 
-  // 2. wrap in a DataView (gives per-read endian control)
-  const view   = new DataView(buffer);
+    // 2. wrap in a DataView (gives per-read endian control)
+    const view = new DataView(buffer);
 
-  // 3. walk through the bytes, 8-byte stride (4 for x, 4 for y)
-  const pts = [];
-  for (let off = 0; off < view.byteLength; off += 8) {
-    const x = view.getInt32(off,     /*littleEndian=*/ true);
-    const y = view.getInt32(off + 4, /*littleEndian=*/ true);
-    pts.push([x, y]);
-  }
-  return {"indices": pts, "baseUrl": url.replace("conversationsMapping.bin", "")};
+    // 3. walk through the bytes, 8-byte stride (4 for x, 4 for y)
+    const pts = [];
+    for (let off = 0; off < view.byteLength; off += 8) {
+        const x = view.getInt32(off, /*littleEndian=*/ true);
+        const y = view.getInt32(off + 4, /*littleEndian=*/ true);
+        pts.push([x, y]);
+    }
+    return {
+        "indices": pts,
+        "baseUrl": url.replace("conversationsMapping.bin", "")
+    };
 }
 
 async function loadPointsLE(url) {
-  url = loadProxyUrl(url);
-  // 1. fetch the raw bytes
-  const res    = await fetch(url);
-  const buffer = await res.arrayBuffer();
+    url = loadProxyUrl(url);
+    // 1. fetch the raw bytes
+    const res = await fetch(url);
+    const buffer = await res.arrayBuffer();
 
-  // 2. wrap in a DataView (gives per-read endian control)
-  const view   = new DataView(buffer);
+    // 2. wrap in a DataView (gives per-read endian control)
+    const view = new DataView(buffer);
 
-  // 3. walk through the bytes, 8-byte stride (4 for x, 4 for y)
-  const pts = [];
-  for (let off = 0; off < view.byteLength; off += 8) {
-    const x = view.getFloat32(off,     /*littleEndian=*/ true);
-    const y = view.getFloat32(off + 4, /*littleEndian=*/ true);
-    pts.push([x, y]);
-  }
-  return pts;
+    // 3. walk through the bytes, 8-byte stride (4 for x, 4 for y)
+    const pts = [];
+    for (let off = 0; off < view.byteLength; off += 8) {
+        const x = view.getFloat32(off, /*littleEndian=*/ true);
+        const y = view.getFloat32(off + 4, /*littleEndian=*/ true);
+        pts.push([x, y]);
+    }
+    return pts;
 }
 
-async function addFacetOption(label, url){
-  if (facetOptions.has(label)) return;
-  facetOptions.set(label, url);
-  plotSelect.appendChild($('option', { value:label }, label));
-  //if (plotSelect.selectedIndex === -1){      // first entry
-  await loadDraw(url);
-  plotSelect.value = label;
-  //}
+async function addFacetOption(label, url) {
+    if (facetOptions.has(label)) return;
+    facetOptions.set(label, url);
+    plotSelect.appendChild($('option', {
+        value: label
+    }, label));
+    //if (plotSelect.selectedIndex === -1){      // first entry
+    await loadDraw(url);
+    plotSelect.value = label;
+    //}
 }
 
 plotSelect.onchange = async () => {
-clearSelection();
-await loadDraw(facetOptions.get(plotSelect.value));
+    clearSelection();
+    await loadDraw(facetOptions.get(plotSelect.value));
 }
 
 var ptsLookup = new Map();
 var minMaxLookup = new Map();
 
-async function loadDraw(url){
-  var pts;
-  if (ptsLookup.has(url)) {
-    pts = ptsLookup.get(url);
-    xyMinMax = minMaxLookup.get(url);
-  }
-  else {
-    pts = await getPoints(url);
-    ptsLookup.set(url, pts);
-    xyMinMax = calcMinMax(pts);
-    minMaxLookup.set(url, xyMinMax);
-  }
-  curPoints = pts;
-  resizeCanvas();
+async function loadDraw(url) {
+    var pts;
+    if (ptsLookup.has(url)) {
+        pts = ptsLookup.get(url);
+        xyMinMax = minMaxLookup.get(url);
+    } else {
+        pts = await getPoints(url);
+        ptsLookup.set(url, pts);
+        xyMinMax = calcMinMax(pts);
+        minMaxLookup.set(url, xyMinMax);
+    }
+    curPoints = pts;
+    resizeCanvas();
 }
 
-function hidePlot(){
-  plotWrap.classList.add('hide');
-  plotLeaf.classList.remove('hidden');
+function hidePlot() {
+    plotWrap.classList.add('hide');
+    plotLeaf.classList.remove('hidden');
 }
-function showPlot(){
-  plotWrap.classList.remove('hide');
-  plotLeaf.classList.add('hidden');
+
+function showPlot() {
+    plotWrap.classList.remove('hide');
+    plotLeaf.classList.add('hidden');
 }
 
 plotToggle.onclick = hidePlot;
-plotLeaf.onclick    = showPlot;
+plotLeaf.onclick = showPlot;
 
 
 plotMaxBtn.onclick = () => {
-  plotWrap.classList.toggle('max');
-  plotWrap.classList.toggle('smol');
-  setTimeout(() => {
-    //resizeCanvas();
-    //drawPoints();
-  }, 260);   // wait for transition, then fit
+    plotWrap.classList.toggle('max');
+    plotWrap.classList.toggle('smol');
+    setTimeout(() => {
+        //resizeCanvas();
+        //drawPoints();
+    }, 260); // wait for transition, then fit
 };
 
 
-document.addEventListener('keydown',e=>{
-  if (e.key==='h'){
-    if (plotWrap.classList.contains('hide')) showPlot();
-    else hidePlot();
-  }
-  if (e.key==='m') plotMaxBtn.onclick();
-  if (e.key==='x') hideAllHulls();
+document.addEventListener('keydown', e => {
+    if (e.key === 'h') {
+        if (plotWrap.classList.contains('hide')) showPlot();
+        else hidePlot();
+    }
+    if (e.key === 'm') plotMaxBtn.onclick();
+    if (e.key === 'x') hideAllHulls();
 });
 
 const MAGIC = new TextEncoder().encode("EJ01"); // 4-byte signature
 
-async function deriveKey(password, salt, iterations){
-  const keyMaterial = await crypto.subtle.importKey(
-      "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-      {name:"PBKDF2",hash:"SHA-256",salt,iterations},
-      keyMaterial,{name:"AES-GCM",length:256},false,["decrypt"]);
+async function deriveKey(password, salt, iterations) {
+    const keyMaterial = await crypto.subtle.importKey(
+        "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({
+            name: "PBKDF2",
+            hash: "SHA-256",
+            salt,
+            iterations
+        },
+        keyMaterial, {
+            name: "AES-GCM",
+            length: 256
+        }, false, ["decrypt"]);
 }
 
 var password = null;
 
 function credAPIAvailable() {
-  return ('credentials' in navigator) && ('PasswordCredential' in window);
+    return ('credentials' in navigator) && ('PasswordCredential' in window);
 }
 
 /* ---------- retrieve (auto-fill) ---------- */
 async function loadPwdViaCredAPI() {
-  if (!credAPIAvailable()) { 
-    return null;
-  }  
-    
-  try {
-    // unmediated:true  ⇒ silent auto-sign-in if the user allowed it
-    const cred = await navigator.credentials.get({password: true, unmediated: true});
-    return cred ? cred.password : null;
-  } catch { return null; }
+    if (!credAPIAvailable()) {
+        return null;
+    }
+
+    try {
+        // unmediated:true  ⇒ silent auto-sign-in if the user allowed it
+        const cred = await navigator.credentials.get({
+            password: true,
+            unmediated: true
+        });
+        return cred ? cred.password : null;
+    } catch {
+        return null;
+    }
 }
 
 /* ---------- store (after user enters pwd) ---------- */
 async function savePwdViaCredAPI(pwd) {
-  if (!credAPIAvailable()) { 
-    return false;
-  }  
+    if (!credAPIAvailable()) {
+        return false;
+    }
 
-  // We need to supply an “id” (username).  Use something stable:
-  const id = location.origin;
+    // We need to supply an “id” (username).  Use something stable:
+    const id = location.origin;
 
-  const cred = new PasswordCredential({ id, password: pwd });
-  try {
-    await navigator.credentials.store(cred);   // prompts the user
-    return true;
-  } catch { return false; }
+    const cred = new PasswordCredential({
+        id,
+        password: pwd
+    });
+    try {
+        await navigator.credentials.store(cred); // prompts the user
+        return true;
+    } catch {
+        return false;
+    }
 }
 
-async function decryptPasswordProtectedFile(url){
-  url = loadProxyUrl(url);
-  var res;
-  var numRetries = 5;
-  for (var retryIter = 0; retryIter < numRetries; retryIter++) {
-    res = await fetch(url,{cache:'reload'});
-    if (res.ok) break;
-    if (retryIter == numRetries-1) {
-        throw new Error(res.status);
-    } else {
-        await sleep(1); // rate limit
+async function decryptPasswordProtectedFile(url) {
+    url = loadProxyUrl(url);
+    var res;
+    var numRetries = 5;
+    for (var retryIter = 0; retryIter < numRetries; retryIter++) {
+        res = await fetch(url, {
+            cache: 'reload'
+        });
+        if (res.ok) break;
+        if (retryIter == numRetries - 1) {
+            throw new Error(res.status);
+        } else {
+            await sleep(1); // rate limit
+        }
     }
-  }
-  var alreadyHasPassword = password !== null;
-  const arrayBuf   = await res.arrayBuffer();     // wait here
-  for (var attempts = 0; attempts < 10; attempts++) {
-      try {
+    var alreadyHasPassword = password !== null;
+    const arrayBuf = await res.arrayBuffer(); // wait here
+    for (var attempts = 0; attempts < 10; attempts++) {
+        try {
             if (!password) {
                 password = await loadPwdViaCredAPI();
                 if (!password) {
                     var promptStr = attempts > 0 ? "Wrong Password. Password?" : "Password?";
-                    password  = prompt(promptStr);
+                    password = prompt(promptStr);
                 }
             }
-          const u8  = new Uint8Array(arrayBuf);
-          const dv  = new DataView(arrayBuf);
+            const u8 = new Uint8Array(arrayBuf);
+            const dv = new DataView(arrayBuf);
 
-          /* 1 ─ validate header */
-          for(let i=0;i<4;i++) if(u8[i]!==MAGIC[i]) throw "Bad magic";
-          const iterations = dv.getUint32(4, true);
-          const salt  = u8.slice(8, 24);
-          const nonce = u8.slice(24, 36);
-          const data  = u8.slice(36);
+            /* 1 ─ validate header */
+            for (let i = 0; i < 4; i++)
+                if (u8[i] !== MAGIC[i]) throw "Bad magic";
+            const iterations = dv.getUint32(4, true);
+            const salt = u8.slice(8, 24);
+            const nonce = u8.slice(24, 36);
+            const data = u8.slice(36);
 
-          /* 2 ─ PBKDF2 → AES-GCM */
-          const key   = await deriveKey(password, salt, iterations);
+            /* 2 ─ PBKDF2 → AES-GCM */
+            const key = await deriveKey(password, salt, iterations);
 
-          /* 3 ─ decrypt, gunzip, parse JSON */
-          const plain = new Uint8Array(
-              await crypto.subtle.decrypt({name:"AES-GCM",iv:nonce}, key, data));
-          const json  = JSON.parse(pako.ungzip(plain,{to:"string"}));
-          if (!alreadyHasPassword) {
-            savePwdViaCredAPI(password);
-          }
-          return json;
-    } catch (err) {
-        console.log(err);
-        if (err instanceof DOMException && err.name === "OperationError")
-        {
-          password = null;
+            /* 3 ─ decrypt, gunzip, parse JSON */
+            const plain = new Uint8Array(
+                await crypto.subtle.decrypt({
+                    name: "AES-GCM",
+                    iv: nonce
+                }, key, data));
+            const json = JSON.parse(pako.ungzip(plain, {
+                to: "string"
+            }));
+            if (!alreadyHasPassword) {
+                savePwdViaCredAPI(password);
+            }
+            return json;
+        } catch (err) {
+            console.log(err);
+            if (err instanceof DOMException && err.name === "OperationError") {
+                password = null;
+            } else
+                throw err; // other I/O / JSON errors bubble up
         }
-        else
-          throw err;                        // other I/O / JSON errors bubble up
+
     }
-      
-  }
 }
-    
+
 async function fetchJsonGz(url) {
-  var res;
-  var numRetries = 5;
-  for (var retryIter = 0; retryIter < numRetries; retryIter++) {
-    res = await fetch(url,{cache:'reload'});
-    if (res.ok) break;
-    if (retryIter == numRetries-1) {
-        throw new Error(res.status);
-    } else {
-        await sleep(1); // rate limit
+    var res;
+    var numRetries = 5;
+    for (var retryIter = 0; retryIter < numRetries; retryIter++) {
+        res = await fetch(url, {
+            cache: 'reload'
+        });
+        if (res.ok) break;
+        if (retryIter == numRetries - 1) {
+            throw new Error(res.status);
+        } else {
+            await sleep(1); // rate limit
+        }
     }
-  }
 
-  const ab   = await res.arrayBuffer();     // wait here
-  const buf  = new Uint8Array(ab);
-  const text = pako.ungzip(buf, { to: 'string' });
+    const ab = await res.arrayBuffer(); // wait here
+    const buf = new Uint8Array(ab);
+    const text = pako.ungzip(buf, {
+        to: 'string'
+    });
 
 
-  return JSON.parse(text);
+    return JSON.parse(text);
 }
+
 function join(p) {
     return p.join(".");
 }
+
 function split(s) {
     return s.split(".");
 }
-const getNum=i=>i?.numConversations??i?.numConvs??0;
-const isPlaceholder=i=>typeof i==='object'&&i!==null&&'path'in i&&!('children'in i);
-const count=getNum;
-const sortByCount=a=>[...a].sort((p,q)=>count(q)-count(p));
-const facetCount=f=>Array.isArray(f.hierarchy)?f.hierarchy.reduce((s,c)=>s+count(c),0):0;
+const getNum = i => i?.numConversations ?? i?.numConvs ?? 0;
+const isPlaceholder = i => typeof i === 'object' && i !== null && 'path' in i && !('children' in i);
+const count = getNum;
+const sortByCount = a => [...a].sort((p, q) => count(q) - count(p));
+const facetCount = f => Array.isArray(f.hierarchy) ? f.hierarchy.reduce((s, c) => s + count(c), 0) : 0;
 
 const PASSWORD_PROTECTED = ISPASSWORDPROTECTED;
-const ROOT="ROOTOBJECTSJSON";
-const POINTS_FILE="ISPASSWORDPROTECTED";
-const pathMap=new Map();
-let openConvHash=null;
+const ROOT = "ROOTOBJECTSJSON";
+const POINTS_FILE = "ROOTPOINTS";
+const pathMap = new Map();
+let openConvHash = null;
 
 var conversationsMappings = new Map();
 
@@ -1112,389 +1246,458 @@ var facetIToStr = {};
 var RAW_EMBEDDING_NAME = "Conversation Embeddings";
 
 /* ───────── root build ───────── */
-window.onload=()=>fetchJson(ROOT).then(buildFacets);
-async function buildFacets(raw){
-  await addFacetOption(RAW_EMBEDDING_NAME, POINTS_FILE);
-  const facets=[...raw].sort((a,b)=>facetCount(b)-facetCount(a));
-  const root=document.getElementById('treeRoot'); root.innerHTML='';
-  for (var fi = 0; fi < facets.length; fi++) {
-    var f = facets[fi];
-    const own=facetCount(f);
-    const li=$('li',{},
-      $('details',{},
-        $('summary',{},
-          $('span',{class:'name'},f.facet?.name||'Facet'),
-          own?$('span',{class:'stats'},`${own}`):null,
-          f.facet?.question?$('span',{class:'summary'},f.facet.question):null)));
-    const details=li.firstChild;
-    details.__childrenData=sortByCount(f.hierarchy);
-    details.__faceti = fi;
-    facetIToStr[fi] = f.facet?.name;
-    
-    if(f.points){
-      details.__pointsURL = f.points;
-      await addFacetOption(f.facet?.name, f.points);
-      details.__pointsLoaded = true;
+window.onload = () => fetchJson(ROOT).then(buildFacets);
+async function buildFacets(raw) {
+    await addFacetOption(RAW_EMBEDDING_NAME, POINTS_FILE);
+    const facets = [...raw].sort((a, b) => facetCount(b) - facetCount(a));
+    const root = document.getElementById('treeRoot');
+    root.innerHTML = '';
+    for (var fi = 0; fi < facets.length; fi++) {
+        var f = facets[fi];
+        const own = facetCount(f);
+        const li = $('li', {},
+            $('details', {},
+                $('summary', {},
+                    $('span', {
+                        class: 'name'
+                    }, f.facet?.name || 'Facet'),
+                    own ? $('span', {
+                        class: 'stats'
+                    }, `${own}`) : null,
+                    f.facet?.question ? $('span', {
+                        class: 'summary'
+                    }, f.facet.question) : null)));
+        const details = li.firstChild;
+        details.__childrenData = sortByCount(f.hierarchy);
+        details.__faceti = fi;
+        facetIToStr[fi] = f.facet?.name;
+
+        if (f.points) {
+            details.__pointsURL = f.points;
+            await addFacetOption(f.facet?.name, f.points);
+            details.__pointsLoaded = true;
+        }
+        if (f.conversationsMapping) {
+            var mapping = await loadConversationsMapping(f.conversationsMapping);
+            // use the first mapping for the raw embeddings as well
+            if (!conversationsMappings.has(RAW_EMBEDDING_NAME)) {
+                conversationsMappings.set(RAW_EMBEDDING_NAME, mapping);
+            }
+            conversationsMappings.set(f.facet?.name, mapping);
+        }
+        details.__pathArr = [`f${fi}`];
+        details.addEventListener('toggle', handleToggle);
+        pathMap.set('f' + fi, details);
+        root.appendChild(li);
+
     }
-    if(f.conversationsMapping) {
-        var mapping = await loadConversationsMapping(f.conversationsMapping);
-       // use the first mapping for the raw embeddings as well
-       if (!conversationsMappings.has(RAW_EMBEDDING_NAME)) {
-            conversationsMappings.set(RAW_EMBEDDING_NAME, mapping);
-       }
-       conversationsMappings.set(f.facet?.name, mapping);
-    }
-    details.__pathArr=[`f${fi}`];
-    details.addEventListener('toggle',handleToggle);
-    pathMap.set('f'+fi,details);
-    root.appendChild(li);
-    
-  }
-  restoreFromHash();
-  resizeCanvas();
+    restoreFromHash();
+    resizeCanvas();
 }
 
 
 /* ───────── builders ───────── */
-async function buildNode(faceti,item,pathArr,siblingTotal, rootConvs){
-  if(isPlaceholder(item)) return await buildPlaceholder(faceti,item,pathArr,siblingTotal);
-  const p=join(pathArr);
-  const details=$('details',{}); pathMap.set(p,details);
-  const own=count(item), pct=siblingTotal?Math.round(own*100/siblingTotal):100;
-  details.appendChild(
-    $('summary',{},
-      $('span',{class:'name'},item.name||'(unnamed)'),
-      $('span',{class:'stats'},`${own} (${pct} %)`),
-      item.summary?$('span',{class:'summary'},item.summary):null));
-  details.__childrenData=sortByCount(item.children||[]);
-  details.__convs=item.conversations||null;
-  details.__pathArr=pathArr;
-  details.__concaveHull=item.concaveHull;
-  details.__faceti = faceti;
-  details.__rootConvs = rootConvs; 
-  if (details.__concaveHull){
-      // ① eye in the <summary>
-      const eye = $('span',
-          {class:'eyeToggle', title:'Toggle cluster'}, '👁');
-      eye.onclick = async ev => {            // stop the <details> toggle
-        ev.stopPropagation();
-       ev.preventDefault();    // cancel the <details> auto-toggle
-        await toggleHullForNode(details);
-      };
-      // insert at the start
-      details.firstChild.insertBefore(eye,  details.firstChild.firstChild);
+async function buildNode(faceti, item, pathArr, siblingTotal, rootConvs) {
+    if (isPlaceholder(item)) return await buildPlaceholder(faceti, item, pathArr, siblingTotal);
+    const p = join(pathArr);
+    const details = $('details', {});
+    pathMap.set(p, details);
+    const own = count(item),
+        pct = siblingTotal ? Math.round(own * 100 / siblingTotal) : 100;
+    details.appendChild(
+        $('summary', {},
+            $('span', {
+                class: 'name'
+            }, item.name || '(unnamed)'),
+            $('span', {
+                class: 'stats'
+            }, `${own} (${pct} %)`),
+            item.summary ? $('span', {
+                class: 'summary'
+            }, item.summary) : null));
+    details.__childrenData = sortByCount(item.children || []);
+    details.__convs = item.conversations || null;
+    details.__pathArr = pathArr;
+    details.__concaveHull = item.concaveHull;
+    details.__faceti = faceti;
+    details.__rootConvs = rootConvs;
+    if (details.__concaveHull) {
+        // ① eye in the <summary>
+        const eye = $('span', {
+            class: 'eyeToggle',
+            title: 'Toggle cluster'
+        }, '👁');
+        eye.onclick = async ev => { // stop the <details> toggle
+            ev.stopPropagation();
+            ev.preventDefault(); // cancel the <details> auto-toggle
+            await toggleHullForNode(details);
+        };
+        // insert at the start
+        details.firstChild.insertBefore(eye, details.firstChild.firstChild);
 
-      // store a back-reference for later
-      details.__eye = eye;
+        // store a back-reference for later
+        details.__eye = eye;
     }
-  details.addEventListener('toggle',handleToggle);
-  return $('li',{},details);
+    details.addEventListener('toggle', handleToggle);
+    return $('li', {}, details);
 }
-async function buildPlaceholder(faceti,ph,pathArr,siblingTotal){
-  const url=ph.path, pathStr=join(pathArr);
-  var data;
-  if (PASSWORD_PROTECTED) {
-    data=await decryptPasswordProtectedFile(url);
-  }
-  else {
-    data=await fetchJsonGz(url);
-  }
-  return (data.children||data.conversations) ?  await buildNode(faceti,data,pathArr,siblingTotal, data.conversationsData) : buildLeaf(url,data);
+async function buildPlaceholder(faceti, ph, pathArr, siblingTotal) {
+    const url = ph.path,
+        pathStr = join(pathArr);
+    var data;
+    if (PASSWORD_PROTECTED) {
+        data = await decryptPasswordProtectedFile(url);
+    } else {
+        data = await fetchJsonGz(url);
+    }
+    return (data.children || data.conversations) ? await buildNode(faceti, data, pathArr, siblingTotal, data.conversationsData) : buildLeaf(url, data);
 }
-function buildLeaf(url,data){
-  const d=$('details',{},$('summary',{},url.split('/').pop()));
-  d.appendChild($('pre',{},JSON.stringify(data,null,2).slice(0,1000)));
-  return $('li',{},d);
+
+function buildLeaf(url, data) {
+    const d = $('details', {}, $('summary', {}, url.split('/').pop()));
+    d.appendChild($('pre', {}, JSON.stringify(data, null, 2).slice(0, 1000)));
+    return $('li', {}, d);
 }
 
 /* ───────── toggle handler ───────── */
-async function handleToggle(e){
-  const det=e.currentTarget;
-  const parentPath=join(det.__pathArr);
-  /* ─ eye visibility ─ */
-  if (det.__eye){
-    //det.__eye.style.display = det.open ? 'none' : '';
-  }
-  
-  if(det.open){
-  
-      
-    if(!det.__built && det.__childrenData){
-      const childTotal=det.__childrenData.reduce((s,i)=>s+count(i),0);
-      const ul=$('ul',{class:'tree'});
-      det.appendChild(ul);
-      for (var i in det.__childrenData) {
-        var ch = det.__childrenData[i];
-        var spinnerChild = "";
-        if (isPlaceholder(ch)) {
-            spinnerChild = $('li',{},spinner());
-            ul.appendChild(spinnerChild);
-        }
-        var childNode = await buildNode(det.__faceti, ch,[...det.__pathArr,i],childTotal,det.__rootConvs);
-        if (isPlaceholder(ch)) {
-            spinnerChild.replaceWith(childNode);
-        }
-        else {
-            ul.appendChild(childNode);
-        }
-      }
-      det.__built=true;
+async function handleToggle(e) {
+    const det = e.currentTarget;
+    const parentPath = join(det.__pathArr);
+    /* ─ eye visibility ─ */
+    if (det.__eye) {
+        //det.__eye.style.display = det.open ? 'none' : '';
     }
-    if(det.__convs && !det.__convsBuilt){
-      const cDet=$('details',{},$('summary',{},`Conversations (${det.__convs.length})`));
-      const cUL=$('ul',{class:'tree'});
-      
-      det.__convs.forEach((c,i)=>{
-        const ent=$('details',{},$('summary',{},det.__rootConvs[c].facetValue||`Conversation #${i+1}`));
-        ent.firstChild.addEventListener('click',ev=>{
-          treeNavArr = det.__convs;
-          treeRootConvs = det.__rootConvs;
-          curItem = i;
-          ev.stopPropagation();openConversation(c,det.__pathArr,i,det.__rootConvs);
+
+    if (det.open) {
+
+
+        if (!det.__built && det.__childrenData) {
+            const childTotal = det.__childrenData.reduce((s, i) => s + count(i), 0);
+            const ul = $('ul', {
+                class: 'tree'
+            });
+            det.appendChild(ul);
+            for (var i in det.__childrenData) {
+                var ch = det.__childrenData[i];
+                var spinnerChild = "";
+                if (isPlaceholder(ch)) {
+                    spinnerChild = $('li', {}, spinner());
+                    ul.appendChild(spinnerChild);
+                }
+                var childNode = await buildNode(det.__faceti, ch, [...det.__pathArr, i], childTotal, det.__rootConvs);
+                if (isPlaceholder(ch)) {
+                    spinnerChild.replaceWith(childNode);
+                } else {
+                    ul.appendChild(childNode);
+                }
+            }
+            det.__built = true;
+        }
+        if (det.__convs && !det.__convsBuilt) {
+            const cDet = $('details', {}, $('summary', {}, `Conversations (${det.__convs.length})`));
+            const cUL = $('ul', {
+                class: 'tree'
+            });
+
+            det.__convs.forEach((c, i) => {
+                const ent = $('details', {}, $('summary', {}, det.__rootConvs[c].facetValue || `Conversation #${i+1}`));
+                ent.firstChild.addEventListener('click', ev => {
+                    treeNavArr = det.__convs;
+                    treeRootConvs = det.__rootConvs;
+                    curItem = i;
+                    ev.stopPropagation();
+                    openConversation(c, det.__pathArr, i, det.__rootConvs);
+                });
+                cUL.appendChild($('li', {}, ent));
+            });
+            cDet.appendChild(cUL);
+            det.appendChild(cDet);
+            const cKey = parentPath + '$c';
+            cDet.__pathArr = [...det.__pathArr];
+            pathMap.set(cKey, cDet);
+            cDet.addEventListener('toggle', updateHash);
+            det.__convsBuilt = true;
+        }
+    } else {
+        det.querySelectorAll(':scope > ul.tree, :scope > details').forEach(n => n.remove());
+        det.__built = false;
+        det.__convsBuilt = false;
+        for (const key of [...pathMap.keys()]) {
+            if (key.startsWith(parentPath + '.') || key === parentPath + '$c') {
+                pathMap.delete(key);
+            }
+        }
+        var removedAny = false;
+        for (const [path, {
+                idx,
+                facetI,
+                color
+            }] of [...hullVisible]) {
+            if (path.startsWith(parentPath + '.')) {
+                hullVisible.delete(path);
+                removedAny = true;
+            }
+        }
+        if (removedAny) {
+            drawPoints();
+        }
+        if (openConvHash && openConvHash.startsWith(`c!${parentPath}.`)) closeConversation();
+    }
+    updateHash();
+}
+
+
+const modalWrap = document.getElementById('modalWrap');
+const convContent = document.getElementById('convContent');
+document.querySelector('.closeBtn').onclick = closeConversation;
+modalWrap.addEventListener('click', e => {
+    if (e.target === modalWrap) closeConversation();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeConversation();
+});
+
+function openConversation(obj, pathArr, idx, convsArr) {
+    obj = convsArr[obj];
+    treeNavPath = pathArr;
+    updateModalNav(treeNavArr.length, idx); // enable / disable arrows
+    openConvHash = `c!${join(pathArr)}!${idx}`;
+    convContent.innerHTML = '';
+    if (obj.allFacetValues?.length) {
+        const colors = ['#ff7675', '#74b9ff', '#55efc4', '#fdcb6e', '#ffeaa7', '#a29bfe', '#fab1a0', '#81ecec'];
+        const box = $('div', {
+            class: 'facets'
         });
-        cUL.appendChild($('li',{},ent));
-      });
-      cDet.appendChild(cUL); det.appendChild(cDet);
-      const cKey=parentPath+'$c';
-      cDet.__pathArr=[...det.__pathArr];
-      pathMap.set(cKey,cDet);
-      cDet.addEventListener('toggle',updateHash);
-      det.__convsBuilt=true;
+        obj.allFacetValues.forEach((fv, i) => {
+            box.appendChild($('div', {
+                    class: 'facetBubble',
+                    style: `background:${colors[i%colors.length]}`
+                },
+                `${fv.facet}: ${fv.value}`));
+        });
+        convContent.appendChild(box);
     }
-  }else{
-    det.querySelectorAll(':scope > ul.tree, :scope > details').forEach(n=>n.remove());
-    det.__built=false;det.__convsBuilt=false;
-    for(const key of [...pathMap.keys()]){
-      if(key.startsWith(parentPath+'.')||key===parentPath+'$c') {
-         pathMap.delete(key);
-      }
-    }
-    var removedAny = false;
-    for (const [path,{idx,facetI,color}] of [...hullVisible]){
-      if(path.startsWith(parentPath+'.')) {
-         hullVisible.delete(path);
-         removedAny = true;
-      }
-    }
-    if (removedAny) {
-        drawPoints();
-    }
-    if(openConvHash && openConvHash.startsWith(`c!${parentPath}.`)) closeConversation();
-  }
-  updateHash();
-}
-
-/* ───────── modal ───────── */
-const modalWrap=document.getElementById('modalWrap');
-const convContent=document.getElementById('convContent');
-document.querySelector('.closeBtn').onclick=closeConversation;
-modalWrap.addEventListener('click',e=>{if(e.target===modalWrap)closeConversation();});
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeConversation();});
-
-function openConversation(obj,pathArr,idx,convsArr){
-  obj = convsArr[obj];
-  treeNavPath = pathArr;
-  updateModalNav(treeNavArr.length, idx);   // enable / disable arrows
-  openConvHash=`c!${join(pathArr)}!${idx}`;
-  convContent.innerHTML='';
-  if(obj.allFacetValues?.length){
-    const colors=['#ff7675','#74b9ff','#55efc4','#fdcb6e','#ffeaa7','#a29bfe','#fab1a0','#81ecec'];
-    const box=$('div',{class:'facets'});
-    obj.allFacetValues.forEach((fv,i)=>{
-      box.appendChild($('div',{class:'facetBubble',style:`background:${colors[i%colors.length]}`},
-        `${fv.facet}: ${fv.value}`));
+    obj.conversation.forEach(m => {
+        const d = $('div', {
+                class: `msg ${m.role}`
+            },
+            $('span', {
+                class: 'role'
+            }, m.role + ': '));
+        const span = $('span', {});
+        span.innerHTML = mdToHtml(m.content);
+        d.appendChild(span);
+        convContent.appendChild(d);
     });
-    convContent.appendChild(box);
-  }
-  obj.conversation.forEach(m=>{
-    const d=$('div',{class:`msg ${m.role}`},
-      $('span',{class:'role'},m.role+': '));
-    const span=$('span',{});span.innerHTML=mdToHtml(m.content);
-    d.appendChild(span);convContent.appendChild(d);
-  });
-  modalWrap.classList.add('show');modalWrap.classList.remove('hidden');
-  updateHash();
-}
-function closeConversation(){
-    selConvFile = selConvItem = -1;
-  if(!modalWrap.classList.contains('show'))return;
-  modalWrap.classList.remove('show');
-  setTimeout(()=>modalWrap.classList.add('hidden'),250);
-  openConvHash=null;updateHash();
+    modalWrap.classList.add('show');
+    modalWrap.classList.remove('hidden');
+    updateHash();
 }
 
-function mdToHtml(t=''){
-  let h=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  h=h.replace(/```([\s\S]*?)```/g,(m,c)=>`<pre><code>${c}</code></pre>`);
-  h=h.replace(/`([^`]+?)`/g,'<code>$1</code>');
-  h=h.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-  h=h.replace(/\*([^*]+)\*/g,'<em>$1</em>');
-  return h.replace(/\n/g,'<br>');
+function closeConversation() {
+    selConvFile = selConvItem = -1;
+    if (!modalWrap.classList.contains('show')) return;
+    modalWrap.classList.remove('show');
+    setTimeout(() => modalWrap.classList.add('hidden'), 250);
+    openConvHash = null;
+    updateHash();
+}
+
+function mdToHtml(t = '') {
+    let h = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    h = h.replace(/```([\s\S]*?)```/g, (m, c) => `<pre><code>${c}</code></pre>`);
+    h = h.replace(/`([^`]+?)`/g, '<code>$1</code>');
+    h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    return h.replace(/\n/g, '<br>');
 }
 
 
 var curHash = "";
 
 window.addEventListener("hashchange", function(event) {
-  if (window.location.hash != curHash && modifyHashAllowed) {
-    restoreFromHash().then(() => {
-        curHash = window.location.hash;
-    });
-  }
+    if (window.location.hash != curHash && modifyHashAllowed) {
+        restoreFromHash().then(() => {
+            curHash = window.location.hash;
+        });
+    }
 });
 
 /* ───────── hash sync ───────── */
-function updateHash(){
-  if(!modifyHashAllowed)return;
-  const tokens = [...pathMap.entries()]
-                  .filter(([,d]) => d.open)
-                  .map(([p]) => p);
+function updateHash() {
+    if (!modifyHashAllowed) return;
+    const tokens = [...pathMap.entries()]
+        .filter(([, d]) => d.open)
+        .map(([p]) => p);
 
-  if (openConvHash) tokens.push(openConvHash);
-  
-  if (selRect) {
-    const {minX,minY,maxX,maxY} = selRect;
-    
-  const w = plotCanvas.width , h = plotCanvas.height;
-  const nx1 = (minX/w).toFixed(4),
-        ny1 = (minY/h).toFixed(4),
-        nx2 = (maxX/w).toFixed(4),
-        ny2 = (maxY/h).toFixed(4);
-  tokens.push(`r!${nx1}=${ny1}=${nx2}=${ny2}`);
-    tokens.push(`p!${curPage|0}`);
-    if (selConvFile >= 0)
-      tokens.push(`s!${selConvFile}.${selConvItem}`);
-  }
-  tokens.push(`fa!${encodeURIComponent(plotSelect.value)}`);
-  
-  hashStr = [...tokens].join(',');
-  const compressedBase64 = LZUTF8.encodeBase64(LZUTF8.compress(hashStr));
-  curHash = "#" + encodeURIComponent(compressedBase64);
-  window.location.hash = curHash;
-}
-let modifyHashAllowed=true;
+    if (openConvHash) tokens.push(openConvHash);
 
-async function expandPath(pathStr){
-  const segs=split(pathStr);
-  const prefix=[];
-  for(const seg of segs){
-    prefix.push(seg);
-    const cur=join(prefix);
-    let det=pathMap.get(cur);
-    if(det && !det.open){
-      det.removeEventListener('toggle', handleToggle);
-      det.open = true;
-      removeHull(det);
-      await handleToggle({ currentTarget: det }); // run it yourself
-      det.addEventListener('toggle', handleToggle);
+    if (selRect) {
+        const {
+            minX,
+            minY,
+            maxX,
+            maxY
+        } = selRect;
+
+        const w = plotCanvas.width,
+            h = plotCanvas.height;
+        const nx1 = (minX / w).toFixed(4),
+            ny1 = (minY / h).toFixed(4),
+            nx2 = (maxX / w).toFixed(4),
+            ny2 = (maxY / h).toFixed(4);
+        tokens.push(`r!${nx1}=${ny1}=${nx2}=${ny2}`);
+        tokens.push(`p!${curPage|0}`);
+        if (selConvFile >= 0)
+            tokens.push(`s!${selConvFile}.${selConvItem}`);
     }
-  }
+    tokens.push(`fa!${encodeURIComponent(plotSelect.value)}`);
+
+    hashStr = [...tokens].join(',');
+    const compressedBase64 = LZUTF8.encodeBase64(LZUTF8.compress(hashStr));
+    curHash = "#" + encodeURIComponent(compressedBase64);
+    window.location.hash = curHash;
+}
+let modifyHashAllowed = true;
+
+async function expandPath(pathStr) {
+    const segs = split(pathStr);
+    const prefix = [];
+    for (const seg of segs) {
+        prefix.push(seg);
+        const cur = join(prefix);
+        let det = pathMap.get(cur);
+        if (det && !det.open) {
+            det.removeEventListener('toggle', handleToggle);
+            det.open = true;
+            removeHull(det);
+            await handleToggle({
+                currentTarget: det
+            }); // run it yourself
+            det.addEventListener('toggle', handleToggle);
+        }
+    }
 }
 
-async function restoreFromHash(){
+async function restoreFromHash() {
 
-loading.classList.remove('hidden');        // ① show spinner
-setLoad('loading tree state…');
-try {
-      modifyHashAllowed=false;
-      hashStr = window.location.hash;
-      if (hashStr.length > 0) {
-        try {
-          hashStr = decodeURIComponent(hashStr.substring(1)) // remove #
-          hashStr = LZUTF8.decompress(LZUTF8.decodeBase64(hashStr), { inputEncoding: "ByteArray", outputEncoding: "String" });
+    loading.classList.remove('hidden'); // ① show spinner
+    setLoad('loading tree state…');
+    try {
+        modifyHashAllowed = false;
+        hashStr = window.location.hash;
+        if (hashStr.length > 0) {
+            try {
+                hashStr = decodeURIComponent(hashStr.substring(1)) // remove #
+                hashStr = LZUTF8.decompress(LZUTF8.decodeBase64(hashStr), {
+                    inputEncoding: "ByteArray",
+                    outputEncoding: "String"
+                });
+            } catch {
+                hashStr = ""
+            }
         }
-        catch {
-          hashStr = ""
+        curHash = window.location.hash;
+        var facetTok = null,
+            rectTok = null,
+            pageTok = null,
+            selConvTok = null;
+        const segs = decodeURIComponent(hashStr).split(',').filter(Boolean);
+        const convSeg = segs.find(s => s.startsWith('c!'));
+
+        const catSegs = [],
+            convListSegs = [];
+
+        segs.forEach(s => {
+            if (s.startsWith('fa!')) facetTok = s;
+            else if (s.startsWith('r!')) rectTok = s;
+            else if (s.startsWith('p!')) pageTok = s;
+            else if (s.startsWith('s!')) selConvTok = s;
+            else if (s && s !== convSeg) {
+                s.endsWith('$c') ? convListSegs.push(s) : catSegs.push(s);
+            }
+        });
+
+        for (const p of [...catSegs].sort((a, b) => a.split('.').length - b.split('.').length)) {
+            await expandPath(p);
         }
-      }
-      curHash = window.location.hash;
-        var facetTok = null, rectTok = null, pageTok = null, selConvTok = null;
-      const segs=decodeURIComponent(hashStr).split(',').filter(Boolean);
-      const convSeg=segs.find(s=>s.startsWith('c!'));
 
-      const catSegs=[], convListSegs=[];
-      
-      segs.forEach(s=>{
-      if (s.startsWith('fa!'))  facetTok = s;
-      else if (s.startsWith('r!'))      rectTok    = s;
-      else if (s.startsWith('p!')) pageTok    = s;
-      else if (s.startsWith('s!'))selConvTok = s;
-      else if (s && s!==convSeg){
-        s.endsWith('$c') ? convListSegs.push(s) : catSegs.push(s);
-      }
-    });
+        convListSegs.forEach(key => {
+            const det = pathMap.get(key);
+            if (det) det.open = true;
+        });
 
-      for(const p of [...catSegs].sort((a,b)=>a.split('.').length-b.split('.').length)){
-        await expandPath(p);
-      }
+        if (convSeg) {
+            const [, path, idx] = convSeg.split('!');
+            await expandPath(path);
+            const det = pathMap.get(path);
+            treeNavArr = det.__convs;
+            treeRootConvs = det.__rootConvs;
+            curItem = idx;
 
-      convListSegs.forEach(key=>{
-        const det=pathMap.get(key);
-        if(det) det.open=true;
-      });
-
-      if(convSeg){
-        const [,path,idx]=convSeg.split('!');
-        await expandPath(path);
-        const det=pathMap.get(path);
-          treeNavArr = det.__convs;
-          treeRootConvs = det.__rootConvs;
-          curItem = idx;
-          
             selResults = [];
-        if(det && det.__convs) openConversation(det.__convs[+idx],split(path),+idx,det.__rootConvs);
-      }else closeConversation();
-      modifyHashAllowed=true;
-      
-      /* ---------- facet (plotSelect) ---------- */
-        if (facetTok) {
-          const facetName = decodeURIComponent(facetTok.slice(3));
-          if (plotSelect.value !== facetName && facetOptions.has(facetName)) {
-            plotSelect.value = facetName;
-            await loadDraw(facetOptions.get(facetName));   // loads points for that facet
-          }
-        }
-              /* ---------- restore marquee & selection list ---------- */
-        if (!convSeg && rectTok){
-           // we do floats so difference canvas width and height are preserved
-          const [nx1,ny1,nx2,ny2] = rectTok.slice(2).split('=').map(parseFloat);
-          const w = plotCanvas.width , h = plotCanvas.height;
-          const minX = nx1 * w,  minY = ny1 * h,
-                maxX = nx2 * w,  maxY = ny2 * h;
-          selRect = { minX, maxX, minY, maxY };
-          const idxs   = getPointIndicesInRect(minX,maxX,minY,maxY);
-          const mapping = conversationsMappings.get(plotSelect.value);
-          selResults = idxs.map(i=>({fileI:mapping.indices[i][0],
-                                     itemI:mapping.indices[i][1]}));
+            if (det && det.__convs) openConversation(det.__convs[+idx], split(path), +idx, det.__rootConvs);
+        } else closeConversation();
+        modifyHashAllowed = true;
 
-          curPage = pageTok ? +pageTok.slice(2) : 0;
-          await renderSelPage(true);
-          selPane.classList.remove('hidden');
-          plotWrap.classList.add('smol');
-          drawPoints();
-          showTree(false);
-          showTreeToggle(true);
+        /* ---------- facet (plotSelect) ---------- */
+        if (facetTok) {
+            const facetName = decodeURIComponent(facetTok.slice(3));
+            if (plotSelect.value !== facetName && facetOptions.has(facetName)) {
+                plotSelect.value = facetName;
+                await loadDraw(facetOptions.get(facetName)); // loads points for that facet
+            }
+        }
+        /* ---------- restore marquee & selection list ---------- */
+        if (!convSeg && rectTok) {
+            // we do floats so difference canvas width and height are preserved
+            const [nx1, ny1, nx2, ny2] = rectTok.slice(2).split('=').map(parseFloat);
+            const w = plotCanvas.width,
+                h = plotCanvas.height;
+            const minX = nx1 * w,
+                minY = ny1 * h,
+                maxX = nx2 * w,
+                maxY = ny2 * h;
+            selRect = {
+                minX,
+                maxX,
+                minY,
+                maxY
+            };
+            const idxs = getPointIndicesInRect(minX, maxX, minY, maxY);
+            const mapping = conversationsMappings.get(plotSelect.value);
+            selResults = idxs.map(i => ({
+                fileI: mapping.indices[i][0],
+                itemI: mapping.indices[i][1]
+            }));
+
+            curPage = pageTok ? +pageTok.slice(2) : 0;
+            selPane.classList.remove('hidden');
+            plotWrap.classList.add('smol');
+            drawPoints();
+            showTree(false);
+            showTreeToggle(true);
+            await renderSelPage(true);
         }
 
         /* ---------- optionally reopen the modal ---------- */
-        if (!convSeg && selConvTok){
-          const [f,i] = selConvTok.slice(2).split('.').map(Number);
-          loadAndShowConversation(f, i);         // uses spinner, keeps state
+        if (!convSeg && selConvTok) {
+            const [f, i] = selConvTok.slice(2).split('.').map(Number);
+            loadAndShowConversation(f, i); // uses spinner, keeps state
         }
-      
-   }
-   finally {
-        loading.classList.add('hidden');        // ① show spinner
-   }
-  
+
+    } finally {
+        loading.classList.add('hidden'); // ① show spinner
+    }
+
 }
 
 
 /* return the cached array for that data file or undefined     */
-function cachedConvs(fileURL){
-  return loadAndShowConversation.cache
-         ? loadAndShowConversation.cache.get(fileURL)
-         : undefined;
+function cachedConvs(fileURL) {
+    return loadAndShowConversation.cache ?
+        loadAndShowConversation.cache.get(fileURL) :
+        undefined;
 }
 
 var alreadyProcessed = new Set();
@@ -1502,19 +1705,19 @@ var alreadyProcessed = new Set();
 var labelFrequencies = new Map();
 
 /* try to replace the label of one <button>                    */
-function maybeUpdateLabel(btn){
-  const fileI = +btn.dataset.f,
+function maybeUpdateLabel(btn) {
+    const fileI = +btn.dataset.f,
         itemI = +btn.dataset.i,
         mapping = conversationsMappings.get(plotSelect.value),
         fileURL = `${mapping.baseUrl}data${fileI}.json.gz`,
         convArr = cachedConvs(fileURL);
 
-  if (convArr){
-    const cv = convArr[itemI];
-    const label = cv.facetValue ||        // in our datasets
-                  cv.allFacetValues?.[0]?.value;   // fall-back
-    if (label) btn.textContent = label;
-  }
+    if (convArr) {
+        const cv = convArr[itemI];
+        const label = cv.facetValue || // in our datasets
+            cv.allFacetValues?.[0]?.value; // fall-back
+        if (label) btn.textContent = label;
+    }
 }
 
 // from https://gist.github.com/sebleier/554280
@@ -1527,248 +1730,223 @@ for (const common of commons) {
 
 var numUnloaded = 0;
 /* try to replace the label of one <button>                    */
-function storeFrequencies(){
-  var mapping = conversationsMappings.get(plotSelect.value);
-  var newFiles = new Set();
-  var unloadedFiles = new Set();
-  numUnloaded = 0;
-  for (const i of selResults) {
-    if (alreadyProcessed.has(i.fileI)) {
-        continue;
-    }
-    var fileI = i.fileI;
-    var itemI = i.itemI;
-    var fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
-    var convArr = cachedConvs(fileURL);
-    var label = "<unloaded>";
-    if (convArr) {
-        const cv = convArr[itemI];
-        label = cv.facetValue ||        // in our datasets
-                      cv.allFacetValues?.[0]?.value;   // fall-back
-        newFiles.add(i.fileI);
-        if (!labelFrequencies.has(label)) {
-            labelFrequencies.set(label, 0);
+function storeFrequencies() {
+    var mapping = conversationsMappings.get(plotSelect.value);
+    var newFiles = new Set();
+    var unloadedFiles = new Set();
+    numUnloaded = 0;
+    for (const i of selResults) {
+        if (alreadyProcessed.has(i.fileI)) {
+            continue;
         }
-        labelFrequencies.set(label, labelFrequencies.get(label)+1);
-        
-        
-        // if raw embeddings, do word cloud over conversation contents
-        if (plotSelect.value === RAW_EMBEDDING_NAME) {
+        var fileI = i.fileI;
+        var itemI = i.itemI;
+        var fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
+        var convArr = cachedConvs(fileURL);
+        var label = "<unloaded>";
+        if (convArr) {
             const cv = convArr[itemI];
-            var convStr = [];
-            for (const turn of cv.conversation) {
-                convStr.push(turn.content);            
+            label = cv.facetValue || // in our datasets
+                cv.allFacetValues?.[0]?.value; // fall-back
+            newFiles.add(i.fileI);
+            if (!labelFrequencies.has(label)) {
+                labelFrequencies.set(label, 0);
             }
-            label = convStr.join(" ").replace("\n", " ").replace("\r", " ").replace("\t", " ");
-        }
-        
-        for (const word of splitIntoWords(label)) {
-            var wordLower = word.toLowerCase();
-            if (commonWords.has(wordLower)) continue;
-            if (!wordFrequencies.has(wordLower)) {
-                wordFrequencies.set(wordLower, 0);
+            labelFrequencies.set(label, labelFrequencies.get(label) + 1);
+
+
+            // if raw embeddings, do word cloud over conversation contents
+            if (plotSelect.value === RAW_EMBEDDING_NAME) {
+                const cv = convArr[itemI];
+                var convStr = [];
+                for (const turn of cv.conversation) {
+                    convStr.push(turn.content);
+                }
+                label = convStr.join(" ").replace("\n", " ").replace("\r", " ").replace("\t", " ");
             }
-            wordFrequencies.set(wordLower, wordFrequencies.get(wordLower)+1);
+
+            for (const word of splitIntoWords(label)) {
+                var wordLower = word.toLowerCase();
+                if (commonWords.has(wordLower)) continue;
+                if (!wordFrequencies.has(wordLower)) {
+                    wordFrequencies.set(wordLower, 0);
+                }
+                wordFrequencies.set(wordLower, wordFrequencies.get(wordLower) + 1);
+            }
+        } else {
+            unloadedFiles.add(i.fileI);
+            numUnloaded += 1;
         }
     }
-    else {
-        unloadedFiles.add(i.fileI);
-        numUnloaded += 1;
+    for (var newFile of newFiles) {
+        alreadyProcessed.add(newFile);
     }
-  }
-  for (var newFile of newFiles) {
-    alreadyProcessed.add(newFile);
-  }
-  
-  if (unloadedFiles.size > 0) {
-    loadAllBtn.textContent = "Load all (" + numUnloaded + " conversations within " + unloadedFiles.size + " files)";
-  }
-  else {
-    loadAllBtnSpace.classList.toggle("hidden", true);
-  }
-  
-   labelFrequencies.set("<unloaded>", numUnloaded);
+
+    if (unloadedFiles.size > 0) {
+        console.log("unloaded files");
+        console.log(unloadedFiles);
+        loadAllBtn.textContent = "Load all (" + numUnloaded + " conversations within " + unloadedFiles.size + " files)";
+    } else {
+        loadAllBtnSpace.classList.add("hidden");
+    }
+
+    labelFrequencies.set("<unloaded>", numUnloaded);
 }
 
-function renderFrequencies(){
-  storeFrequencies();
-  /* create the box once */
-  let box = document.getElementById('freqBox');
-  if (!box){
-    box = document.createElement('div');
-    box.id = 'freqBox';
-    selPane.appendChild(box);
-  }
+function renderFrequencies() {
+    /* create the box once */
+    let box = document.getElementById('freqBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'freqBox';
+        selPane.appendChild(box);
+    }
 
-  /* sort by descending count */
-  const rows = [...labelFrequencies.entries()]
-               .sort((a,b) => b[1]-a[1])
-               .slice(0, 100);                // top-100;
+    /* sort by descending count */
+    const rows = [...labelFrequencies.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 100); // top-100;
 
-  /* build chips */
-  box.innerHTML = "";
-  for (const [label,count] of rows){
-    const chip = document.createElement('span');
-    chip.className = 'freqChip';
-    chip.textContent = `${label} (${count})`;
-    box.appendChild(chip);
-  }
-  buildWordCloud();
+    /* build chips */
+    box.innerHTML = "";
+    for (const [label, count] of rows) {
+        const chip = document.createElement('span');
+        chip.className = 'freqChip';
+        chip.textContent = `${label} (${count})`;
+        box.appendChild(chip);
+    }
 }
+
 function splitIntoWords(s) {
     return s.split(/[^\p{L}\p{N}\p{Extended_Pictographic}]+/u).filter(subStr => subStr.length > 0);
 }
 
 
 var wordFrequencies = new Map();
-function buildWordCloud(){
-  // Bail out if library not loaded
-  if (typeof WordCloud === 'undefined') return;
 
-    var unloadedStr =  numUnloaded != 0 ? ("(" + numUnloaded + " not loaded yet and ignored, please page over to them)") : "(all loaded)";
+function buildWordCloud() {
+    // Bail out if library not loaded
+    if (typeof WordCloud === 'undefined') return;
+
+    var unloadedStr = numUnloaded != 0 ? ("(" + numUnloaded + " not loaded yet and ignored, please page over to them)") : "(all loaded)";
     wordCloudTitle.textContent = "Selected Conversations' " + (plotSelect.value == RAW_EMBEDDING_NAME ? "Text" : plotSelect.value) + " Word Cloud " + unloadedStr;
 
-  // 1.  Take the 100 most frequent labels
-  const rows = [...wordFrequencies.entries()]
-               .sort((a,b) => b[1]-a[1])
-               .slice(0, 100);
-  
-  var total = 0;
-  for (var vals of rows) {
-    total += vals[1];
-  }
-  
-  // need to normalize or they get too big
-  // 2.  Convert to the “list” format WordCloud expects
-  //     [ [word, weight], … ]
-  const wcList = rows.map(([label,count]) => [label, 100*count/total]);
+    // 1.  Take the 100 most frequent labels
+    const rows = [...wordFrequencies.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 100);
 
-  // 3.  Draw
-  const canvas = document.getElementById('wcCanvas');
-  WordCloud(canvas, {
-    list: wcList,
-    weightFactor: 10,               // tweak size scaling
-    minSize: 8,                     // smallest font (px)
-    backgroundColor: 'rgba(0,0,0,0)', // keep site bg
-    color: (_, weight) => weight > rows[0][1]*0.6 ? '#6ec1ff'
-                                 : weight > rows[0][1]*0.3 ? '#74b9ff'
-                                 : '#9e9e9e',
-    rotateRatio: 0.15,              // few words angled
-    shuffle: false,                 // heavier words first
-    origin: [canvas.width/2, canvas.height/2],
-    drawOutOfBound: false
-  });
-}
+    var total = 0;
+    for (var vals of rows) {
+        total += vals[1];
+    }
 
-/* update every entry currently visible in the list            */
-function updateSelLabels(){
-  [...selList.children].forEach(maybeUpdateLabel);
-  renderFrequencies();                 // ← new
+    // need to normalize or they get too big
+    // 2.  Convert to the “list” format WordCloud expects
+    //     [ [word, weight], … ]
+    const wcList = rows.map(([label, count]) => [label, 100 * count / total]);
+
+    // 3.  Draw
+    const canvas = document.getElementById('wcCanvas');
+    WordCloud(canvas, {
+        list: wcList,
+        weightFactor: 10, // tweak size scaling
+        minSize: 8, // smallest font (px)
+        backgroundColor: 'rgba(0,0,0,0)', // keep site bg
+        color: (_, weight) => weight > rows[0][1] * 0.6 ? '#6ec1ff' : weight > rows[0][1] * 0.3 ? '#74b9ff' : '#9e9e9e',
+        rotateRatio: 0.15, // few words angled
+        shuffle: false, // heavier words first
+        origin: [canvas.width / 2, canvas.height / 2],
+        drawOutOfBound: false
+    });
 }
 
 
-/* ──────── 3. after loading a conversation,                */
-/*            refresh the labels for the current page       */
-const _origLoadAndShow = loadAndShowConversation;
-loadAndShowConversation = async function(fileI,itemI){
-  await _origLoadAndShow(fileI,itemI);   // original behaviour
-  updateSelLabels();                     // relabel peers
-};
 
 
+function hasConvArrayLoaded(fileI) {
+    const mapping = conversationsMappings.get(plotSelect.value);
+    const fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
 
-
-/* ──────────────────────────────────────────────────────────────
-   0.  tiny helper: return a *Promise* with the conversations
-       of a file, using the same cache and decryption logic that
-       loadAndShowConversation already relies on
-----------------------------------------------------------------*/
-
-function hasConvArrayLoaded(fileI)  {
-  const mapping = conversationsMappings.get(plotSelect.value);
-  const fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
-
-  if (!loadAndShowConversation.cache)
+    if (!loadAndShowConversation.cache)
         loadAndShowConversation.cache = new Map();
 
-  return loadAndShowConversation.cache.has(fileURL);
+    return loadAndShowConversation.cache.has(fileURL);
 }
 
-async function getConvArray(fileI){
-  const mapping = conversationsMappings.get(plotSelect.value);
-  const fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
+async function getConvArray(fileI) {
+    const mapping = conversationsMappings.get(plotSelect.value);
+    const fileURL = `${mapping.baseUrl}data${fileI}.json.gz`;
 
-  if (!loadAndShowConversation.cache)
+    if (!loadAndShowConversation.cache)
         loadAndShowConversation.cache = new Map();
 
-  let arr = loadAndShowConversation.cache.get(fileURL);
-  if (!arr){
-    arr = PASSWORD_PROTECTED
-          ? (await decryptPasswordProtectedFile(fileURL)).conversationsData
-          : (await fetchJsonGz(fileURL)).conversationsData;
-    loadAndShowConversation.cache.set(fileURL, arr);
-  }
-  return arr;
+    let arr = loadAndShowConversation.cache.get(fileURL);
+    if (!arr) {
+        arr = PASSWORD_PROTECTED ?
+            (await decryptPasswordProtectedFile(fileURL)).conversationsData :
+            (await fetchJsonGz(fileURL)).conversationsData;
+        loadAndShowConversation.cache.set(fileURL, arr);
+    }
+    return arr;
 }
+
 loadAllBtn.onclick = preloadAllSelectedFiles;
 async function preloadAllSelectedFiles() {
-  if (!selResults.length) return;
+    if (!selResults.length) return;
 
-  loading.classList.remove('hidden');
-  setLoad('loading files … 0/0');
+    loading.classList.remove('hidden');
+    setLoad('loading files … 0/0');
 
-  /* build unique file-id list */
-  const fileSet = new Set(selResults.map(r => r.fileI).filter(fileI => !hasConvArrayLoaded(fileI)));
+    /* build unique file-id list */
+    const fileSet = new Set(selResults.map(r => r.fileI).filter(fileI => !hasConvArrayLoaded(fileI)));
 
-  let done = 0;
-  for (const fileI of fileSet) {
-    await getConvArray(fileI);                 // already cached? → returns instantly
-    setLoad(`loading files … ${++done}/${fileSet.size}`);
-  }
+    let done = 0;
+    for (const fileI of fileSet) {
+        await getConvArray(fileI); // already cached? → returns instantly
+        setLoad(`loading files … ${++done}/${fileSet.size}`);
+    }
 
-  loading.classList.add('hidden');
+    /* now every conversation is in RAM → update labels & chips */
+    await renderSelPage(false);
 
-  /* now every conversation is in RAM → update labels & chips */
-  renderSelPage(false);
+    loading.classList.add('hidden');
+
 }
 
-/* ──────────────────────────────────────────────────────────────
-   1.  preload every file that appears on the current page
-----------------------------------------------------------------*/
-async function preloadCurrentPage(alreadyLoading){
-  
-    if (!alreadyLoading) loading.classList.remove('hidden');        // ① show spinner
+async function preloadCurrentPage(alreadyLoading) {
+
+    if (!alreadyLoading) loading.classList.remove('hidden');
     setLoad('loading files…');
-  try {
-  
-  
-  const total = selResults.length;
-  const pages = Math.ceil(total / PAGE_SIZE) || 1;
+    try {
 
-  // clamp page index
-  curPage = Math.min(Math.max(curPage, 0), pages - 1);
 
-  // slice rows for this page
-  const start = curPage * PAGE_SIZE;
-  
-  const rows  = selResults.slice(start, start + PAGE_SIZE);
-  // only load ones we haven't already loaded
-  const fileSet = new Set(rows.map(({fileI, itemI}) => fileI).filter(fileI => !hasConvArrayLoaded(fileI)));
-  var i = 0;
-  for (var fileId of fileSet) {
-     await getConvArray(fileId);
-     setLoad(`loading files … ${i+1}/${fileSet.size}`);
-     i += 1;
-  }
+        const total = selResults.length;
+        const pages = Math.ceil(total / PAGE_SIZE) || 1;
 
-  // once all are cached → relabel buttons
-  updateSelLabels();
-  }
-  finally {
-    if (!alreadyLoading) loading.classList.add('hidden');        // ① show spinner
-  }
+        // clamp page index
+        curPage = Math.min(Math.max(curPage, 0), pages - 1);
+
+        // slice rows for this page
+        const start = curPage * PAGE_SIZE;
+
+        const rows = selResults.slice(start, start + PAGE_SIZE);
+        // only load ones we haven't already loaded
+        const fileSet = new Set(rows.map(({
+            fileI,
+            itemI
+        }) => fileI).filter(fileI => !hasConvArrayLoaded(fileI)));
+        var i = 0;
+        for (var fileId of fileSet) {
+            await getConvArray(fileId);
+            setLoad(`loading files … ${i+1}/${fileSet.size}`);
+            i += 1;
+        }
+
+    } finally {
+        if (!alreadyLoading) loading.classList.add('hidden');
+    }
 }
-
 
 
 /*!
