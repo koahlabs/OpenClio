@@ -137,14 +137,19 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
 .hidden{display:none}       /* already exists – reused here */
 #treePane.hide { display:none; }
 
-#loading{
-  position:fixed; inset:0; display:flex;
-  align-items:center; justify-content:center;
-  background:rgba(0,0,0,.45);       /* dim page */
-  z-index:998;                      /* just under the modal */
-}
-#loading.hidden { display:none; }
 
+#loading.hidden { display:none; }
+#loading{
+  position:fixed;
+  inset:0;
+  display:flex;
+  flex-direction:column;     /* NEW – stack children vertically   */
+  align-items:center;
+  justify-content:center;
+  gap:.6rem;                 /* optional: space between text + spinner */
+  background:rgba(0,0,0,.45);
+  z-index:998;
+}
 /* frequency chips under the “Selected conversations” panel */
 #freqBox{
   margin-top:.7rem;
@@ -163,6 +168,17 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
 #loadMsg{
   margin-bottom:.6rem;
   font-size:.9rem;
+  color:#fff;                       /* keep the white fill */
+
+  /* 1 – modern browsers that support strokes */
+  -webkit-text-stroke:0.1px #000;   /* Chrome / Safari */
+
+  /* 2 – fallback outline made of shadows (Firefox, Edge-old, …) */
+  text-shadow:
+    -1px -1px 0 #000,
+     1px -1px 0 #000,
+    -1px  1px 0 #000,
+     1px  1px 0 #000;
 }
 
 #plotCanvas{touch-action:none;}   /* allow custom dragging */
@@ -242,7 +258,7 @@ details[open]>ul{animation:fadeDown var(--trans) ease-out}
 </div>
 <div id="plotLeaf" class="hidden" title="Show plot (h)">◀</div>
 <div id="loading" class="hidden">
-<span id="loadMsg">Loading…</span> 
+<span id="loadMsg">Loading…</span>
   <span class="spinner"></span>
 </div>
 <script>
@@ -839,9 +855,9 @@ plotCanvas.addEventListener('pointerleave', () => {
 window.addEventListener('resize', resizeCanvas);
 
 function loadProxyUrl(url) {
-    // you can use this if you want to put your data in another repo
     //return  url.replace("YOURHTTPPREFIX", "https://raw.githubusercontent.com/YOUR_GITHUB_USER_NAME/YOUR_GITHUB_REPO/main");
-    return url;
+    return url.replace("/modelwelfare/cyborgism", "https://raw.githubusercontent.com/Phylliida/cyborgismClio/update1")
+    //return url;
 }
 
 
@@ -1086,7 +1102,7 @@ const facetCount=f=>Array.isArray(f.hierarchy)?f.hierarchy.reduce((s,c)=>s+count
 
 const PASSWORD_PROTECTED = ISPASSWORDPROTECTED;
 const ROOT="ROOTOBJECTSJSON";
-const POINTS_FILE="ROOTPOINTS";
+const POINTS_FILE="ISPASSWORDPROTECTED";
 const pathMap=new Map();
 let openConvHash=null;
 
@@ -1611,7 +1627,7 @@ function buildWordCloud(){
   if (typeof WordCloud === 'undefined') return;
 
     var unloadedStr =  numUnloaded != 0 ? ("(" + numUnloaded + " not loaded yet and ignored, please page over to them)") : "(all loaded)";
-    wordCloudTitle.textContent = "Selected Conversation's " + (plotSelect.value == RAW_EMBEDDING_NAME ? "Text" : plotSelect.value) + " Word Cloud " + unloadedStr;
+    wordCloudTitle.textContent = "Selected Conversations' " + (plotSelect.value == RAW_EMBEDDING_NAME ? "Text" : plotSelect.value) + " Word Cloud " + unloadedStr;
 
   // 1.  Take the 100 most frequent labels
   const rows = [...wordFrequencies.entries()]
