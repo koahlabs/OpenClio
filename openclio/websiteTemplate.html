@@ -1195,6 +1195,7 @@ async function decryptPasswordProtectedFile(url) {
 }
 
 async function fetchJsonGz(url) {
+    url = loadProxyUrl(url); 
     var res;
     var numRetries = 5;
     for (var retryIter = 0; retryIter < numRetries; retryIter++) {
