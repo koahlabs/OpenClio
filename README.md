@@ -155,9 +155,34 @@ In general, your function should just return the string that is then later passe
 
 Having a `summaryCritera` is important, otherwise clusters will not be generated.
 
-## Todo
+## 2D UMAP Plot
 
-Render Clickable 2D UMAP Plot of Embeddings
+In the top left corner, you'll see a umap plot of embeddings of the currently selected facet.
+
+![Umap plot](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/umap plot.png?raw=true)
+
+You can click on the `👁️` to the left of any branch in the tree to see the concave hull of that cluster on the plot. The `👁️` above the plot will hide all hulls.
+
+You can click `⥤` above the plot to expand it. Once you have done that, you can box select some points.
+
+![box select points](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/box select example.png?raw=true)
+
+Once you do this, all data points within your box will be displayed (well, up to 50, the rest you'll need to page over to).
+
+Because this might be too much data files, data files are only loaded as needed for each page.
+
+If you want to load all the data for your selected region, click on the `Load all ...` button towards the top left of the screen.
+
+Below your conversations, there's a drop down to view a word cloud.
+
+The word cloud will be made from facet values, unless you have "Conversation Embeddings" selected (in which case it'll be a word cloud from conversation text data).
+
+There's also a dropdown to see the top 100 facet values (and their frequencies) in your box selected region.
+
+![word cloud and top frequencies](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/box selected word cloud.png?raw=true)
+
+The UI state in all of this is saved in your url hash, so just share your url to share what you see with someone else.
+
 
 ## Related Work and Citations
 
