@@ -1783,8 +1783,6 @@ function storeFrequencies() {
     }
 
     if (unloadedFiles.size > 0) {
-        console.log("unloaded files");
-        console.log(unloadedFiles);
         loadAllBtn.textContent = "Load all (" + numUnloaded + " conversations within " + unloadedFiles.size + " files)";
     } else {
         loadAllBtnSpace.classList.add("hidden");
