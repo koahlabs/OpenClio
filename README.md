@@ -3,7 +3,7 @@ Open source version of [Anthropic's Clio: A system for privacy-preserving insigh
 
 Designed to run using local LLMs via [VLLM](https://github.com/vllm-project/vllm).
 
-See an example run of this on ~400,000 english conversations from Wildchat [here](https://www.phylliida.dev/modelwelfare/wildchat/).
+See an example run of this on ~400,000 english conversations from Wildchat [here](https://www.phylliida.dev/modelwelfare/wildchat2/).
 
 ## How do I use?
 
