@@ -159,13 +159,13 @@ Having a `summaryCritera` is important, otherwise clusters will not be generated
 
 In the top left corner, you'll see a umap plot of embeddings of the currently selected facet.
 
-![Umap plot](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/umap plot.png?raw=true)
+![Umap plot](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/umap%20plot.png?raw=true)
 
 You can click on the `👁️` to the left of any branch in the tree to see the concave hull of that cluster on the plot. The `👁️` above the plot will hide all hulls.
 
 You can click `⥤` above the plot to expand it. Once you have done that, you can box select some points.
 
-![box select points](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/box select example.png?raw=true)
+![box select points](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/box%20select%20example.png?raw=true)
 
 Once you do this, all data points within your box will be displayed (well, up to 50, the rest you'll need to page over to).
 
@@ -179,7 +179,7 @@ The word cloud will be made from facet values, unless you have "Conversation Emb
 
 There's also a dropdown to see the top 100 facet values (and their frequencies) in your box selected region.
 
-![word cloud and top frequencies](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/box selected word cloud.png?raw=true)
+![word cloud and top frequencies](https://github.com/Phylliida/OpenClio/blob/main/project-wiki/assets/box%20selected%20word%20cloud.png?raw=true)
 
 The UI state in all of this is saved in your url hash, so just share your url to share what you see with someone else.
 
