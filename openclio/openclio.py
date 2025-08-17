@@ -437,11 +437,10 @@ def getHierarchy(
                     clusterNames = extractAnswerNumberedList(clusterNamesOutput, ignoreNoTrailing=True)
                     if len(clusterNames) != 0:
                         cfg.print("Success at manual retry")
-                        break
+                        return [(removePunctuation(clusterName).strip(), clusterIndicesInNeighborhood) for clusterName in clusterNames]
                     else:
                         cfg.print("Failed manual retry, trying again")
-                        cfg.print(output)
-                    return [(removePunctuation(clusterName).strip(), clusterIndicesInNeighborhood) for clusterName in clusterNames[:desired]]
+                        cfg.print(clusterNamesOutput)
             
             def dedupAndMergeSources(values: List[Tuple[str, Sources]]) -> List[Tuple[str, Sources]]:
                 resultValues = defaultdict(lambda: set())
@@ -494,7 +493,7 @@ def getHierarchy(
                 # fall back to dedup based on embedding (usually this means model got stuck in a loop, and it's better we ignore its outputs)
                 if len(extractedOptions) == 0:
                     # no dedup extracted, falling back to dedup based on embedding 
-                    extractedOptions = deduplicateByEmbeddingsAndMergeSources(valuesAndSources=higherCategoriesInNeighborhood, embeddingModel=embeddingModel, tau=0.1)
+                    extractedOptions = [value for value, _ in deduplicateByEmbeddingsAndMergeSources(valuesAndSources=higherCategoriesInNeighborhood, embeddingModel=embeddingModel, tau=0.1)]
                 return [(removePunctuation(output).strip(), allSources) for output in extractedOptions]
 
 
