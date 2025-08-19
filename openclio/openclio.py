@@ -798,7 +798,7 @@ def getFacetValues(
         nonlocal seed
         seed += 1
         samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False, stage='get-facet-values')
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
     def processOutputFunc(conversation: List[Dict[str, str]], conversationPrompts: List[str], facetOutputs: List[str]) -> ConversationFacetData:
