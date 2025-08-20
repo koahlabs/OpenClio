@@ -1023,6 +1023,9 @@ def getMedoidSummaryAndName(outputs: List[str], embeddingModel: SentenceTransfor
     summaries = []
     names = []
     for output in outputs:
+        # Extract only what's after the <summary> tag, if it exists
+        output = output.split('<summary>')[-1]
+
         # re.DOTALL makes . match newlines too (by default it does not)
         matches = re.findall(r"(.*?)</summary>.*?<name>(.*?)</name>", output, re.DOTALL)
         if len(matches) > 0:
