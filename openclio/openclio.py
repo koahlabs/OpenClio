@@ -145,6 +145,65 @@ def runClio(facets: List[Facet],
             cloudpickle.dump(res, f)
         return res, True
     
+    def getFacetValues(
+        facets: List[Facet],
+        llm: vllm.LLM,
+        data: List[List[Dict[str, str]]],
+        cfg: OpenClioConfig
+    ) -> List[ConversationFacetData]:
+        """
+        Gets facet values for every conversation, for each of the facets provided, using the provided llm.
+        Returns a list of ConversationFacetData objects,
+        one for each conversation
+        """
+        tokenizer = llm.get_tokenizer()
+        index = 0
+        def getInputsFunc(conversation: List[Dict[str, str]]) -> List[str]:
+            # runBatched will automatically flatten these into us for nice batched usage,
+            # then unflatten them back before calling processOutputFunc
+            # so we can send in whatever sort of nested lists we want (though in this case it's only one deep)
+            conversation = cfg.getConversationFunc(conversation) # map it, if needed
+            inputs = []
+            for facet in facets:
+                if facet.getFacetPrompt is None:
+                    facetInput = getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
+                else:
+                    facetInput = facet.getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
+                inputs.append(facetInput)
+            return inputs
+        seed = cfg.seed
+        def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
+            nonlocal seed
+            seed += 1
+            samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+            modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False, stage='get-facet-values')
+            return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
+
+        def processWithFileCheck(batchOfPrompts: List[str]) -> List[str]:
+            path = f"values_{index}.pkl"
+            index += 1
+            return runIfNotExist(path, 
+                lambda: processBatchFunc(batchOfPrompts=batchOfPrompts),
+                dependencyModified=False
+            )[0]
+
+        def processOutputFunc(conversation: List[Dict[str, str]], conversationPrompts: List[str], facetOutputs: List[str]) -> ConversationFacetData:
+            return ConversationFacetData(
+                conversation=conversation,
+                facetValues=[
+                    FacetValue(
+                        facet=facet,
+                        value=extractTagValue(value, "answer")[1].strip()
+                    ) for (facet, value) in zip(facets, facetOutputs)]
+            )
+
+        return runBatched(data,
+                getInputs=getInputsFunc,
+                processBatch=processWithFileCheck,
+                processOutput=processOutputFunc,
+                batchSize=cfg.llmBatchSize,
+                verbose=cfg.verbose)
+    
     def getResults():
         nonlocal data
         nonlocal dependencyModified
@@ -767,56 +826,6 @@ def getFacetValuesEmbeddings(
                     batchSize=cfg.embedBatchSize,
                     verbose=cfg.verbose)
 
-
-def getFacetValues(
-        facets: List[Facet],
-        llm: vllm.LLM,
-        data: List[List[Dict[str, str]]],
-        cfg: OpenClioConfig
-    ) -> List[ConversationFacetData]:
-    """
-    Gets facet values for every conversation, for each of the facets provided, using the provided llm.
-    Returns a list of ConversationFacetData objects,
-    one for each conversation
-    """
-    tokenizer = llm.get_tokenizer()
-    def getInputsFunc(conversation: List[Dict[str, str]]) -> List[str]:
-        # runBatched will automatically flatten these into us for nice batched usage,
-        # then unflatten them back before calling processOutputFunc
-        # so we can send in whatever sort of nested lists we want (though in this case it's only one deep)
-        conversation = cfg.getConversationFunc(conversation) # map it, if needed
-        inputs = []
-        for facet in facets:
-            if facet.getFacetPrompt is None:
-                facetInput = getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
-            else:
-                facetInput = facet.getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
-            inputs.append(facetInput)
-        return inputs
-    seed = cfg.seed
-    def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
-        nonlocal seed
-        seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False, stage='get-facet-values')
-        return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
-
-    def processOutputFunc(conversation: List[Dict[str, str]], conversationPrompts: List[str], facetOutputs: List[str]) -> ConversationFacetData:
-        return ConversationFacetData(
-            conversation=conversation,
-            facetValues=[
-                FacetValue(
-                    facet=facet,
-                    value=extractTagValue(value, "answer")[1].strip()
-                ) for (facet, value) in zip(facets, facetOutputs)]
-        )
-
-    return runBatched(data,
-               getInputs=getInputsFunc,
-               processBatch=processBatchFunc,
-               processOutput=processOutputFunc,
-               batchSize=cfg.llmBatchSize,
-               verbose=cfg.verbose)
 
 ##### Various utility parsing stuff #####
 def connectedComponentsFromMask(mask: np.ndarray) -> List[np.ndarray]:
