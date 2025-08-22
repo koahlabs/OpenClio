@@ -180,6 +180,7 @@ def runClio(facets: List[Facet],
             return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
         def processWithFileCheck(batchOfPrompts: List[str]) -> List[str]:
+            nonlocal index
             path = f"values_{index}.pkl"
             index += 1
             return runIfNotExist(path, 
