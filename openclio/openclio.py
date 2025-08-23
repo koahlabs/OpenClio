@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-import vllm
 import pandas as pd
 from typing import Any, Union, Tuple, Optional, Callable, Dict, List, TypeAlias
 import traceback
@@ -15,7 +14,6 @@ from scipy.spatial.distance import cdist
 from collections import defaultdict
 from numpy import typing as npt
 import json
-import torch
 import shutil
 import os
 import re
@@ -83,7 +81,7 @@ genericSummaryFacets = [
 
 
 def runClio(facets: List[Facet], 
-            llm: vllm.LLM,
+            llm,
             embeddingModel: SentenceTransformer,
             data: List[List[Dict[str, str]]],
             outputDirectory: str,
@@ -147,7 +145,7 @@ def runClio(facets: List[Facet],
     
     def getFacetValues(
         facets: List[Facet],
-        llm: vllm.LLM,
+        llm,
         data: List[List[Dict[str, str]]],
         cfg: OpenClioConfig
     ) -> List[ConversationFacetData]:
@@ -175,8 +173,8 @@ def runClio(facets: List[Facet],
         def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
             nonlocal seed
             seed += 1
-            samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-            modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False, stage='get-facet-values')
+            # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+            modelOutputs = llm.generate(batchOfPrompts, use_tqdm=False, stage='get-facet-values')
             return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
 
         def processWithFileCheck(batchOfPrompts: List[str]) -> List[str]:
@@ -399,7 +397,7 @@ def getNeighborhoods(
 
 def getHierarchy(
     facets: List[Facet],
-    llm: vllm.LLM,
+    llm,
     embeddingModel: SentenceTransformer,
     baseClusters: List[Optional[List[ConversationCluster]]],
     cfg: OpenClioConfig) -> List[Optional[List[ConversationCluster]]]:
@@ -423,8 +421,8 @@ def getHierarchy(
     def processBatchFuncLLM(prompts: List[str]) -> List[str]:
         nonlocal seed # we increment it so duplicate entries will get distinct things
         seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-        modelOutputs = llm.generate(prompts, sampling_params=samplingParams, use_tqdm=False)
+        # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+        modelOutputs = llm.generate(prompts, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs] 
     
     topLevelParents = []
@@ -491,8 +489,8 @@ def getHierarchy(
                     cfg.print(prompt)
                     nonlocal seed # we increment it so duplicate entries will get distinct things
                     seed += 1
-                    samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-                    modelOutputs = llm.generate([prompt], sampling_params=samplingParams, use_tqdm=False)
+                    # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+                    modelOutputs = llm.generate([prompt], use_tqdm=False)
                     clusterNamesOutput = [modelOutput.outputs[0].text for modelOutput in modelOutputs][0]
                     clusterNames = extractAnswerNumberedList(clusterNamesOutput, ignoreNoTrailing=True)
                     if len(clusterNames) != 0:
@@ -692,7 +690,7 @@ def getHierarchy(
 
 def getBaseClusters(
         facets: List[Facet],
-        llm: vllm.LLM,
+        llm,
         embeddingModel: SentenceTransformer,
         facetValues: List[ConversationFacetData],
         facetValuesEmbeddings: List[Optional[EmbeddingArray]],
@@ -941,9 +939,9 @@ def setSeed(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
+    # torch.manual_seed(seed)
+    # torch.cuda.manual_seed(seed)
+    # torch.backends.cudnn.deterministic = True
 
 def bestRepresentativePair(
     A: List[str],
