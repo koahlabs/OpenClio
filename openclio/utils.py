@@ -359,7 +359,7 @@ def getDuplicateFacetValues(
         facetValues: List['ConversationFacetData'],
         facetName: str,
         conversations: List[Dict[str, str]],
-        llm : vllm.LLM,
+        llm,
         maxConversationTokens: int
     ):
     """
