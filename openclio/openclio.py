@@ -750,9 +750,9 @@ def getBaseClusters(
             def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
                 nonlocal seed
                 seed += 1 # do this so repeated entries get different outputs
-                samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+                # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
                 try:
-                    modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+                    modelOutputs = llm.generate(batchOfPrompts, use_tqdm=False)
                 except:
                     with open("badInputs.pkl", "wb") as f:
                         cloudpickle.dump(batchOfPrompts, f)
