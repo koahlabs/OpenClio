@@ -4,7 +4,7 @@ from typing import Any, Union, Tuple, Optional, Callable, Dict, List, TypeAlias
 import traceback
 import faiss 
 import functools
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import cosine_similarity
@@ -26,6 +26,10 @@ from .utils import flatten, unflatten, runBatched, dedup, runWebui
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .faissKMeans import FaissKMeans
 from .writeOutput import convertOutputToWebpage, computeUmap
+
+
+class SentenceTransformer:
+    pass
 
 # these are facets from the paper
 mainFacets = [

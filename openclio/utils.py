@@ -1,7 +1,6 @@
 import datetime
 import pytz
 from typing import Tuple, List, Dict, Callable, Any
-from sentence_transformers import SentenceTransformer
 import os
 import http.server
 import socketserver
@@ -339,7 +338,7 @@ def runBatchedIterator(inputs, n, getInputs, processBatch, processOutput, batchS
 
 def getClosestNames(
     names: List[str],
-    embeddingModel: SentenceTransformer
+    embeddingModel
     ) -> Tuple[int, int, float]:
     """
     Get the pair of names that have closest embeddings when using embeddingModel
