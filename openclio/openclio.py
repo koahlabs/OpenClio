@@ -1,11 +1,10 @@
 from dataclasses import dataclass, field
-import vllm
 import pandas as pd
 from typing import Any, Union, Tuple, Optional, Callable, Dict, List, TypeAlias
 import traceback
 import faiss 
 import functools
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn import preprocessing
 from sklearn.metrics.pairwise import cosine_similarity
@@ -15,7 +14,6 @@ from scipy.spatial.distance import cdist
 from collections import defaultdict
 from numpy import typing as npt
 import json
-import torch
 import shutil
 import os
 import re
@@ -28,6 +26,10 @@ from .utils import flatten, unflatten, runBatched, dedup, runWebui
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .faissKMeans import FaissKMeans
 from .writeOutput import convertOutputToWebpage, computeUmap
+
+
+class SentenceTransformer:
+    pass
 
 # these are facets from the paper
 mainFacets = [
@@ -83,7 +85,7 @@ genericSummaryFacets = [
 
 
 def runClio(facets: List[Facet], 
-            llm: vllm.LLM,
+            llm,
             embeddingModel: SentenceTransformer,
             data: List[List[Dict[str, str]]],
             outputDirectory: str,
@@ -144,6 +146,66 @@ def runClio(facets: List[Facet],
         with open(fullPath, "wb") as f:
             cloudpickle.dump(res, f)
         return res, True
+    
+    def getFacetValues(
+        facets: List[Facet],
+        llm,
+        data: List[List[Dict[str, str]]],
+        cfg: OpenClioConfig
+    ) -> List[ConversationFacetData]:
+        """
+        Gets facet values for every conversation, for each of the facets provided, using the provided llm.
+        Returns a list of ConversationFacetData objects,
+        one for each conversation
+        """
+        tokenizer = llm.get_tokenizer()
+        index = 0
+        def getInputsFunc(conversation: List[Dict[str, str]]) -> List[str]:
+            # runBatched will automatically flatten these into us for nice batched usage,
+            # then unflatten them back before calling processOutputFunc
+            # so we can send in whatever sort of nested lists we want (though in this case it's only one deep)
+            conversation = cfg.getConversationFunc(conversation) # map it, if needed
+            inputs = []
+            for facet in facets:
+                if facet.getFacetPrompt is None:
+                    facetInput = getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
+                else:
+                    facetInput = facet.getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
+                inputs.append(facetInput)
+            return inputs
+        seed = cfg.seed
+        def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
+            nonlocal seed
+            seed += 1
+            # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+            modelOutputs = llm.generate(batchOfPrompts, use_tqdm=False, stage='get-facet-values')
+            return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
+
+        def processWithFileCheck(batchOfPrompts: List[str]) -> List[str]:
+            nonlocal index
+            path = f"values_{index}.pkl"
+            index += 1
+            return runIfNotExist(path, 
+                lambda: processBatchFunc(batchOfPrompts=batchOfPrompts),
+                dependencyModified=False
+            )[0]
+
+        def processOutputFunc(conversation: List[Dict[str, str]], conversationPrompts: List[str], facetOutputs: List[str]) -> ConversationFacetData:
+            return ConversationFacetData(
+                conversation=conversation,
+                facetValues=[
+                    FacetValue(
+                        facet=facet,
+                        value=extractTagValue(value, "answer")[1].strip()
+                    ) for (facet, value) in zip(facets, facetOutputs)]
+            )
+
+        return runBatched(data,
+                getInputs=getInputsFunc,
+                processBatch=processWithFileCheck,
+                processOutput=processOutputFunc,
+                batchSize=cfg.llmBatchSize,
+                verbose=cfg.verbose)
     
     def getResults():
         nonlocal data
@@ -339,7 +401,7 @@ def getNeighborhoods(
 
 def getHierarchy(
     facets: List[Facet],
-    llm: vllm.LLM,
+    llm,
     embeddingModel: SentenceTransformer,
     baseClusters: List[Optional[List[ConversationCluster]]],
     cfg: OpenClioConfig) -> List[Optional[List[ConversationCluster]]]:
@@ -363,8 +425,8 @@ def getHierarchy(
     def processBatchFuncLLM(prompts: List[str]) -> List[str]:
         nonlocal seed # we increment it so duplicate entries will get distinct things
         seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-        modelOutputs = llm.generate(prompts, sampling_params=samplingParams, use_tqdm=False)
+        # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+        modelOutputs = llm.generate(prompts, use_tqdm=False)
         return [modelOutput.outputs[0].text for modelOutput in modelOutputs] 
     
     topLevelParents = []
@@ -431,8 +493,8 @@ def getHierarchy(
                     cfg.print(prompt)
                     nonlocal seed # we increment it so duplicate entries will get distinct things
                     seed += 1
-                    samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-                    modelOutputs = llm.generate([prompt], sampling_params=samplingParams, use_tqdm=False)
+                    # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+                    modelOutputs = llm.generate([prompt], use_tqdm=False)
                     clusterNamesOutput = [modelOutput.outputs[0].text for modelOutput in modelOutputs][0]
                     clusterNames = extractAnswerNumberedList(clusterNamesOutput, ignoreNoTrailing=True)
                     if len(clusterNames) != 0:
@@ -632,7 +694,7 @@ def getHierarchy(
 
 def getBaseClusters(
         facets: List[Facet],
-        llm: vllm.LLM,
+        llm,
         embeddingModel: SentenceTransformer,
         facetValues: List[ConversationFacetData],
         facetValuesEmbeddings: List[Optional[EmbeddingArray]],
@@ -688,9 +750,9 @@ def getBaseClusters(
             def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
                 nonlocal seed
                 seed += 1 # do this so repeated entries get different outputs
-                samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
+                # samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
                 try:
-                    modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
+                    modelOutputs = llm.generate(batchOfPrompts, use_tqdm=False)
                 except:
                     with open("badInputs.pkl", "wb") as f:
                         cloudpickle.dump(batchOfPrompts, f)
@@ -767,56 +829,6 @@ def getFacetValuesEmbeddings(
                     batchSize=cfg.embedBatchSize,
                     verbose=cfg.verbose)
 
-
-def getFacetValues(
-        facets: List[Facet],
-        llm: vllm.LLM,
-        data: List[List[Dict[str, str]]],
-        cfg: OpenClioConfig
-    ) -> List[ConversationFacetData]:
-    """
-    Gets facet values for every conversation, for each of the facets provided, using the provided llm.
-    Returns a list of ConversationFacetData objects,
-    one for each conversation
-    """
-    tokenizer = llm.get_tokenizer()
-    def getInputsFunc(conversation: List[Dict[str, str]]) -> List[str]:
-        # runBatched will automatically flatten these into us for nice batched usage,
-        # then unflatten them back before calling processOutputFunc
-        # so we can send in whatever sort of nested lists we want (though in this case it's only one deep)
-        conversation = cfg.getConversationFunc(conversation) # map it, if needed
-        inputs = []
-        for facet in facets:
-            if facet.getFacetPrompt is None:
-                facetInput = getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
-            else:
-                facetInput = facet.getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs=cfg.tokenizerArgs)
-            inputs.append(facetInput)
-        return inputs
-    seed = cfg.seed
-    def processBatchFunc(batchOfPrompts: List[str]) -> List[str]:
-        nonlocal seed
-        seed += 1
-        samplingParams = vllm.SamplingParams(seed=seed, **cfg.llmExtraInferenceArgs)
-        modelOutputs = llm.generate(batchOfPrompts, sampling_params=samplingParams, use_tqdm=False)
-        return [modelOutput.outputs[0].text for modelOutput in modelOutputs]
-
-    def processOutputFunc(conversation: List[Dict[str, str]], conversationPrompts: List[str], facetOutputs: List[str]) -> ConversationFacetData:
-        return ConversationFacetData(
-            conversation=conversation,
-            facetValues=[
-                FacetValue(
-                    facet=facet,
-                    value=extractTagValue(value, "answer")[1].strip()
-                ) for (facet, value) in zip(facets, facetOutputs)]
-        )
-
-    return runBatched(data,
-               getInputs=getInputsFunc,
-               processBatch=processBatchFunc,
-               processOutput=processOutputFunc,
-               batchSize=cfg.llmBatchSize,
-               verbose=cfg.verbose)
 
 ##### Various utility parsing stuff #####
 def connectedComponentsFromMask(mask: np.ndarray) -> List[np.ndarray]:
@@ -931,9 +943,9 @@ def setSeed(seed):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
+    # torch.manual_seed(seed)
+    # torch.cuda.manual_seed(seed)
+    # torch.backends.cudnn.deterministic = True
 
 def bestRepresentativePair(
     A: List[str],
@@ -1023,6 +1035,9 @@ def getMedoidSummaryAndName(outputs: List[str], embeddingModel: SentenceTransfor
     summaries = []
     names = []
     for output in outputs:
+        # Extract only what's after the <summary> tag, if it exists
+        output = output.split('<summary>')[-1]
+
         # re.DOTALL makes . match newlines too (by default it does not)
         matches = re.findall(r"(.*?)</summary>.*?<name>(.*?)</name>", output, re.DOTALL)
         if len(matches) > 0:

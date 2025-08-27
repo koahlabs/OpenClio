@@ -4,7 +4,6 @@ import json
 from collections import defaultdict
 from pathlib import Path
 import gzip
-from sentence_transformers import SentenceTransformer
 from .opencliotypes import Facet, FacetValue, ConversationFacetData, ConversationEmbedding, ConversationCluster, OpenClioConfig, OpenClioResults, EmbeddingArray, shouldMakeFacetClusters
 from .lzutf8 import compress
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -279,7 +278,7 @@ def computeUmapHelper(embeddingArr: EmbeddingArray, verbose: bool = False):
     umapModel = umap.UMAP(n_components=2, unique=True, verbose=verbose)
     return umapModel.fit_transform(embeddingArr)
 
-def computeUmap(data: List[Any], facetValuesEmbeddings: List[Optional[EmbeddingArray]], embeddingModel: SentenceTransformer, tokenizer, cfg: OpenClioConfig):
+def computeUmap(data: List[Any], facetValuesEmbeddings: List[Optional[EmbeddingArray]], embeddingModel, tokenizer, cfg: OpenClioConfig):
     cfg.print("Running umap on facet values")
     resUmaps = [(computeUmapHelper(embeddingArr, verbose=cfg.verbose) if embeddingArr is not None else None) for embeddingArr in facetValuesEmbeddings]
     cfg.print("Embedding conversations for umap")
