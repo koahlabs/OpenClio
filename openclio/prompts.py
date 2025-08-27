@@ -19,7 +19,7 @@ def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict,
         cachedTokenizer = (tokenizerArgs, tokenizer)
     if not funcName in replacementCache:
         messages = getMessagesFunc()
-        inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, return_tensors="pt", continue_final_message=True, **tokenizerArgs)
+        inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, continue_final_message=True, **tokenizerArgs)
         prompt = tokenizer.decode(inputs['input_ids'][0])
         replacementCache[funcName] = prompt
     prompt = replacementCache[funcName]
