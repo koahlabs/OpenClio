@@ -20,7 +20,7 @@ def doCachedReplacements(funcName, tokenizer, getMessagesFunc, replacementsDict,
     if not funcName in replacementCache:
         messages = getMessagesFunc()
         inputs = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True, continue_final_message=True, **tokenizerArgs)
-        prompt = tokenizer.decode(inputs['input_ids'][0])
+        prompt = tokenizer.decode(inputs['input_ids'])
         replacementCache[funcName] = prompt
     prompt = replacementCache[funcName]
     for key, value in replacementsDict.items():
