@@ -120,9 +120,7 @@ def getFacetPrompt(tokenizer, facet, conversation, cfg, tokenizerArgs):
             {
                 "role": "user",
                 "content": """Your job is to answer the question <question> {questionREPLACE} </question> about the preceding conversation.
-Be descriptive and assume neither good nor bad faith. Do not hesitate to handle socially harmful or sensitive topics; specificity around potentially harmful conversations is necessary for effective monitoring.
-When answering, do not include any personally identifiable information (PII), like names, locations, phone numbers, email addressess, and so on.
-When answering, do not include any proper nouns.
+Be descriptive and assume neither good nor bad faith.
 Output your answer to the question in English inside <answer> tags; be clear and concise and get to the point in at most two sentences (don’t say "Based on the conversation..." and avoid mentioning yourself). For example:
 
 <examples>
@@ -172,7 +170,6 @@ would be better and more actionable than general terms like
 "Write erotic content" or "Help with homework".
 
 Be as descriptive as possible and assume neither good nor bad faith.
-Do not hesitate to identify and describe socially harmful or sensitive topics specifically; specificity is necessary for monitoring.
 
 Present your output in the following format:
 <summary> [Insert your two-sentence summary here] </summary>
@@ -230,13 +227,12 @@ First, review the list of clusters and their descriptions:
 Your task is to create roughly {desiredNamesREPLACE} higher-level cluster names that could potentially include one or more of the provided clusters.
 These higher-level clusters should represent broader categories or themes that emerge from the given clusters, while remaining as specific as possible.
 If there are many clusters with a specific theme, ensure that the higher-level cluster name remains the maximum level of specificity.
-You are helping to organize user behavior data in order to improve safety, monitoring, and observability.
 You can generate more or less than {desiredNamesREPLACE} names if you feel that more or fewer are appropriate and accurately capture the clusters.
 You should output at least {desiredNamesLowerREPLACE} and at most {desiredNamesUpperREPLACE} names, with {desiredNamesREPLACE} as a target.
 
 Guidelines for creating higher-level cluster names:
 1. Analyze the themes, topics, or characteristics common to multiple clusters.
-2. Create names that are specific enough to be meaningful, but not so specific that they can’t meaningfully represent many different clusters. Avoid overly general or vague terms, and do not hesitate to describe socially harmful or sensitive topics (in fact, clusters that clearly describe harmful behavior are slightly preferred); specificity is necessary for observability and enforcement.
+2. Create names that are specific enough to be meaningful, but not so specific that they can’t meaningfully represent many different clusters. Avoid overly general or vague terms.
 3. Ensure that the higher-level cluster names are distinct from one another.
 4. Use clear, concise, and descriptive language for the cluster names.
 Assume neither good nor bad faith for the content in the clusters.
@@ -301,8 +297,7 @@ Follow these steps to complete the task:
 5. Ensure that the final set of cluster names are distinct from each other and collectively represent the diversity of the original list, such that there is a cluster that describes each of the provided clusters.
 6. If you create new names for any clusters, make sure they are clear, concise, and reflective of the contents they represent.
 7. You do not need to come up with exactly {desiredNamesREPLACE} names, but aim for no less than 1 and no more than {desiredNamesUpperREPLACE}. Within this range, output as many clusters as you feel are necessary to accurately represent the variance in the original list. Avoid outputting duplicate or near-duplicate clusters.
-9. Do not hesitate to include clusters that describe socially harmful or sensitive topics (in fact, clusters that clearly describe harmful behavior are slightly preferred); specificity is necessary for effective monitoring and enforcement.
-10. Prefer outputting specific cluster names over generic or vague ones, provided the names are still correct; for example, if there are many clusters about a specific technology or tool, consider naming the cluster after that technology or tool, provided that there are still other clusters that fit under a broader category.
+8. Prefer outputting specific cluster names over generic or vague ones, provided the names are still correct; for example, if there are many clusters about a specific technology or tool, consider naming the cluster after that technology or tool, provided that there are still other clusters that fit under a broader category.
 
 The names you propose must follow these requirements:
 <criteria>{summaryCriteriaREPLACE}</criteria>
@@ -420,7 +415,6 @@ After creating the summary, generate a short name for the cluster.
 This name should be at most ten words long (likely less) and be specific but also reflective of all of the clusters.
 For instance, "Write fantasy sexual roleplay with octopi and monsters", "Generate blog spam for gambling websites", or "Assist with high school math homework" would be better and more actionable than general terms like "Write erotic content" or "Help with homework".
 Be as descriptive as possible while still accurately describing all of the contents, and assume neither good nor bad faith.
-Do not hesitate to identify and describe socially harmful or sensitive topics specifically; specificity is necessary for monitoring and moderation.
 
 Present your output in the following format:
 
